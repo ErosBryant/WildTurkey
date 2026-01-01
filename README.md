@@ -88,8 +88,3 @@ The benchmark output includes internal timers for detailed profiling. Below are 
 - Benchmarks match configurations in Section V of the paper.
 - Keys are 16 bytes and values are 100 bytes unless otherwise noted.
 - All experiments are intended to be run on SSD-backed storage; default configurations assume SATA, NVMe, or Optane drives.
-- This artifact includes no author-identifiable metadata and is fully anonymized.
-
----
-
-This artifact is provided solely for the purpose of anonymous review. A public release will follow upon paper acceptance.
