@@ -1,0 +1,54 @@
+mod: 8
+Keys:       16 bytes each
+Values:     100 bytes each (50 bytes after compression)
+Entries:    10000000
+RawSize:    1106.3 MB (estimated)
+FileSize:   629.4 MB (estimated)
+------------------------------------------------
+fillrandom   :       2.388 micros/op;   46.3 MB/s;    23.880
+readrandom   :       3.152 micros/op;   35.1 MB/s (10000000 of 10000000 found);    31.518
+--------------------------------------------------
+memtable stall time: 0 s
+L0 stall time: 0  s
+L0 slow stall time: 13.2463  s
+--------------------------------------------------
+Total compaction WA: 1.11349
+Remain disk data:245
+Write data in disk:2416.43
+Timer 0: 2187507712 : 2.187507712
+Timer 1: 825838144 : 0.825838144
+Timer 2: 3687600384 : 3.687600384
+Timer 3: 5158419456 : 5.158419456
+Timer 4: 0 : 0.000000000
+Timer 5: 2459347200 : 2.459347200
+Timer 6: 15013286912 : 15.013286912
+Timer 7: 22932238336 : 22.932238336
+Timer 8: 0 : 0.000000000
+Timer 9: 0 : 0.000000000
+Timer 10: 0 : 0.000000000
+Timer 11: 0 : 0.000000000
+Timer 12: 4191124992 : 4.191124992
+Timer 13: 20180301824 : 20.180301824
+Timer 14: 5141602304 : 5.141602304
+Timer 15: 207031328 : 0.207031328
+Timer 16: 3134308608 : 3.134308608
+Timer 17: 0 : 0.000000000
+Timer 18: 0 : 0.000000000
+Timer 19: 0 : 0.000000000
+Counter BaselineNegative -2147483648 0 3494811648 425216000 0 0 0 0 0
+4195949 0 3774705 421244 0 0 0 0 0
+Counter LLSMNegative 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0
+Counter BaselinePositive -2147483648 0 395612160 4727990272 6240034816 0 0 0 0
+9913452 0 430721 4069790 5412941 0 0 0 0
+Counter LLSMPositive 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0
+
+                               Compactions
+Level  Files  Size(MB) Time(sec) M_Time(micros) Read(MB) Write(MB)  M_Read(MB) M_Write(MB) Count  WA 
+----------------------------------------------------------------------------------------------------- 
+  0         0         0        2         0           0        372          0         0     138  1.00
+  1         5         8        7    367374         668        644         33        35      19  0.96
+  2        51        99       12    109787        1359       1257         11        12     168  0.93
+  3        71       139        0         0         144        143          2         2      71  1.00
+

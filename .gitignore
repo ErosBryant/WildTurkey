@@ -1,0 +1,17 @@
+# Editors.
+*.sw*
+.vscode
+.DS_Store
+.idea/*
+./cmake/*
+cmake-*
+
+# Build directory.
+build/
+out/
+dataset/osm10m.txt
+dataset/osm20m.txt
+dataset/osm50m.txt
+dataset/osm20m.txt
+dataset/osm50m.txt
+dataset/osm10m.txt
