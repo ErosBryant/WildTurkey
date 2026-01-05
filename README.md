@@ -14,6 +14,12 @@ This repository includes:
 
 To compile the benchmark binary:
 
+
+```bash
+git clone https://github.com/ErosBryant/WildTurkey.git
+cd WildTurkey
+```
+
 ```bash
 mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
@@ -39,13 +45,13 @@ The script runs Wild Turkey, WiscKey, Bourbon, and vanilla LevelDB with the same
 cd build
 
 # Wild Turkey
-./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=10 > WildTurkey_test.log
+./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=10 > ../WildTurkey_test.log
 
 # WiscKey
-./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=8 > WiscKey_test.log
+./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=8 > ../WiscKey_test.log
 
 # Bourbon
-./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=7 > Bourbon_test.log
+./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=7 > ../Bourbon_test.log
 
 ```
 
