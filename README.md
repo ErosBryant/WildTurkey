@@ -30,7 +30,7 @@ cmake --build . -j
 
 ## ▶️ Running Benchmarks
 
-### Option 1: Run All Tests via Script (recommended)
+### Option 1: Run All Tests via Script
 
 ```bash
 cd scripts
@@ -54,6 +54,15 @@ cd build
 ./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=7 > ../Bourbon_test.log
 
 ```
+<!-- 
+### Option 3: Run YCSB via Script 
+
+```bash
+cd scripts
+sudo bash ycsb.sh
+``` -->
+
+
 
 > 🔸 The `--mod` flag selects the storage engine mode:
 > - `10`: Wild Turkey

@@ -24,7 +24,7 @@ mkdir -p "${OUT_DIR}"
 cases=(
   "wildturkey:--mod=10"
   "wisckey:--mod=8"
-  # "bourbon:--mod=7"
+  "bourbon:--mod=7"
   # "leveldb:--mod=5"
 )
 

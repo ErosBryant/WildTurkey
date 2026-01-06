@@ -1,19 +1,25 @@
 #!/bin/bash
 set -euo pipefail
 
+# Path handling mirrors scripts/WT_test.sh to avoid hardcoded locations.
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DB_BENCH="${DB_BENCH:-${BASE_DIR}/build/db_bench}"
+OUT_DIR="${OUT_DIR:-${BASE_DIR}/ycsb_runs}"
+
 python3 ./test.py testing start
 
 # Params
-nums=(100000000)
-mods=(8)
-# max_files=(8)
-lac=(4)
+nums=(10000000)
+mods=(10)
 number_of_runs=1
 
-output_dir="/home/eros/workspace-lsm/wicdee/KCC/ycsb/"
-test_dir="/home/eros/workspace-lsm/wildturkey/build"
+if [[ ! -x "${DB_BENCH}" ]]; then
+  echo "db_bench not found or not executable at ${DB_BENCH}" >&2
+  echo "Build first (see README.md), or set DB_BENCH to an existing binary." >&2
+  exit 1
+fi
 
-mkdir -p "$output_dir"
+mkdir -p "${OUT_DIR}"
 
 drop_caches() {
   # Optional: add sync for safety
@@ -23,25 +29,21 @@ drop_caches() {
 # --- Uniform runs (explicit --uni=1) ---
 for num in "${nums[@]}"; do
   for md in "${mods[@]}"; do
-   #  for max_file in "${max_files[@]}"; do
-    for lac_experiment in "${lac[@]}"; do
-      for i in $(seq 1 "$number_of_runs"); do
+    for i in $(seq 1 "$number_of_runs"); do
 
-        out="${output_dir}mod=${md}_uni=1_lac_experiment=${lac_experiment}_num=${num}_run=${i}.txt"
-        {
-          echo "Running db_bench (UNIFORM) --num=${num} --mod=${md} --lac_experiment=${lac_experiment} --uni=1"
-          "${test_dir}/db_bench" \
-            --benchmarks="fillseq,ycsba,ycsbb,ycsbc,ycsbd,ycsbe,ycsbf,stats" \
-            --mod="${md}" \
-            --num="${num}" \
-            --lac="${lac_experiment}" \
-            --uni=1
-          echo "-------------------------------------"
-        } > "${out}"
+      out="${OUT_DIR}/mod=${md}_uni=1_num=${num}_run=${i}.txt"
+      {
+        echo "Running db_bench (UNIFORM) --num=${num} --mod=${md} --uni=1"
+        "${DB_BENCH}" \
+          --benchmarks="fillseq,ycsba,ycsbb,ycsbc,ycsbd,ycsbe,ycsbf,stats" \
+          --mod="${md}" \
+          --num="${num}" \
+          --uni=1
+        echo "-------------------------------------"
+      } > "${out}"
 
 # --max_file_size="${max_file}" \
-        drop_caches
-      done
+      drop_caches
     done
   done
 done
@@ -49,25 +51,21 @@ done
 # --- Zipf runs (explicit --uni=0) ---
 for num in "${nums[@]}"; do
   for md in "${mods[@]}"; do
-   #  for max_file in "${max_files[@]}"; do
-    for lac_experiment in "${lac[@]}"; do
-      for i in $(seq 1 "$number_of_runs"); do
+    for i in $(seq 1 "$number_of_runs"); do
 
-        out="${output_dir}mod=${md}_zip=1_lac_experiment=${lac_experiment}_num=${num}_run=${i}.txt"
-        {
-          echo "Running db_bench (UNIFORM) --num=${num} --mod=${md} --lac_experiment=${lac_experiment} --zip=1"
-          "${test_dir}/db_bench" \
-            --benchmarks="fillseq,ycsba,ycsbb,ycsbc,ycsbd,ycsbe,ycsbf,stats" \
-            --mod="${md}" \
-            --num="${num}" \
-            --lac="${lac_experiment}" \
-            --uni=0
-          echo "-------------------------------------"
-        } > "${out}"
+      out="${OUT_DIR}/mod=${md}_zip=1_num=${num}_run=${i}.txt"
+      {
+        echo "Running db_bench (UNIFORM) --num=${num} --mod=${md} --zip=1"
+        "${DB_BENCH}" \
+          --benchmarks="fillseq,ycsba,ycsbb,ycsbc,ycsbd,ycsbe,ycsbf,stats" \
+          --mod="${md}" \
+          --num="${num}" \
+          --uni=0
+        echo "-------------------------------------"
+      } > "${out}"
 
          # --max_file_size="${max_file}" \
-        drop_caches
-      done
+      drop_caches
     done
   done
 done
