@@ -3,10 +3,11 @@ set -euo pipefail
 
 # Path handling mirrors scripts/WT_test.sh to avoid hardcoded locations.
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="${BASE_DIR}/scripts"
 DB_BENCH="${DB_BENCH:-${BASE_DIR}/build/db_bench}"
 OUT_DIR="${OUT_DIR:-${BASE_DIR}/ycsb_runs}"
 
-python3 ./test.py testing start
+python3 "${SCRIPT_DIR}/test.py" testing start
 
 # Params
 nums=(10000000)
@@ -69,4 +70,4 @@ for num in "${nums[@]}"; do
     done
   done
 done
-python3 ./test.py testing end
+python3 "${SCRIPT_DIR}/test.py" testing end

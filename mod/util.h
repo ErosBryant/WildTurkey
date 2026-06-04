@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
+#include <atomic>
 #include <vector>
 #include "db/db_impl.h"
 #include "leveldb/slice.h"
@@ -50,6 +51,7 @@ namespace adgMod {
     extern uint32_t test_num_level_segments;
     extern uint32_t test_num_file_segments;
     extern double level_size;
+    extern bool AlwaysLearn;
 
     // some variables and pointers made global
     extern int key_size;
@@ -73,6 +75,17 @@ namespace adgMod {
     extern int policy;
     extern std::atomic<int> num_read;
     extern std::atomic<int> num_write;
+
+    struct ModelTrainingStats {
+        std::atomic<uint64_t> model_bytes;
+        std::atomic<uint64_t> training_ns;
+        std::atomic<uint64_t> rl_ns;
+        std::atomic<uint64_t> model_count;
+
+        ModelTrainingStats()
+            : model_bytes(0), training_ns(0), rl_ns(0), model_count(0) {}
+    };
+    extern ModelTrainingStats model_training_stats;
 
     extern int file_allowed_seek;
     extern int level_allowed_seek;

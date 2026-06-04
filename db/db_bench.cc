@@ -5,14 +5,23 @@
 #include <sys/types.h>
 #include <mod/util.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <csignal>
+#include <cstdint>
 #include <fstream>
+#include <random>
 #include <string>
+#include <unistd.h>
+#include <execinfo.h>
 
 #include "leveldb/cache.h"
 #include "leveldb/db.h"
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/write_batch.h"
+#include "db/db_impl.h"
 #include "port/port.h"
 #include "util/crc32c.h"
 #include "util/histogram.h"
@@ -20,6 +29,28 @@
 #include "util/random.h"
 #include "util/testutil.h"
 #include <iostream>
+
+namespace {
+void PrintCrashBacktrace(int signal) {
+  void* frames[64];
+  const int n = backtrace(frames, 64);
+  const char header[] = "\nWT crash backtrace\n";
+  write(STDERR_FILENO, header, sizeof(header) - 1);
+  backtrace_symbols_fd(frames, n, STDERR_FILENO);
+  _exit(128 + signal);
+}
+
+void InstallCrashBacktraceHandler() {
+  struct sigaction action;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = PrintCrashBacktrace;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = SA_RESETHAND;
+  sigaction(SIGSEGV, &action, nullptr);
+  sigaction(SIGABRT, &action, nullptr);
+  sigaction(SIGFPE, &action, nullptr);
+}
+}
 
 
 // Comma-separated list of operations to run in the specified order
@@ -34,6 +65,8 @@
 //      readseq       -- read N times sequentially
 //      readreverse   -- read N times in reverse order
 //      readrandom    -- read N times in random order
+//      balanced      -- run N random operations with 50% reads and 50% writes
+//      readheavy     -- run N random operations with 90% reads and 10% writes
 //      readmissing   -- read N missing keys in random order
 //      readhot       -- read N times in random order from 1% section of DB
 //      seekrandom    -- N random seeks
@@ -44,6 +77,17 @@
 //      stats       -- Print DB stats
 //      sstables    -- Print sstable info
 //      heapprofile -- Dump a heap profile (if supported by this port)
+//      waitbg      -- Wait for background compaction/learning to drain
+//   Real-world benchmarks:
+//      fillrandom_r -- write N shuffled keys sampled from the selected dataset
+//      readrandom_r -- read N shuffled keys sampled from the selected dataset
+//      balanced_r   -- run N operations with 50% reads and 50% writes
+//      readheavy_r  -- run N operations with 90% reads and 10% writes
+//   Real-world benchmark flags:
+//      dataset -- select dataset from ../datasets/data (books, osm_cellids, wiki, fb)
+//      dataset_size -- select dataset size (e.g., 200M, 400M, 800M)
+//      also can use "num" to specify the number of keys to read/write.
+
 static const char* FLAGS_benchmarks =
     "fillseq,"
     "fillsync,"
@@ -66,6 +110,7 @@ static const char* FLAGS_benchmarks =
 
 // Number of key/values to place in database
 static int FLAGS_num = 1000000;
+static bool FLAGS_num_was_set = false;
 
 // Number of read operations to do.  If negative, do FLAGS_num reads.
 static int FLAGS_reads = -1;
@@ -126,7 +171,9 @@ static const char* input_file = nullptr;
 static bool FLAGS_use_real_data = false;
 
 // file path of real data
-static const char* FLAGS_path_real_data = "invalid";
+static const char* FLAGS_path_real_data = "../datasets/data";
+static const char* FLAGS_dataset = nullptr;
+static const char* FLAGS_dataset_size = nullptr;
 
 //#define __OPTIMIZE__
 //#define NDEBUG
@@ -136,6 +183,89 @@ namespace leveldb {
 
 namespace {
 leveldb::Env* g_env = nullptr;
+
+std::string JoinPath(const std::string& base, const std::string& leaf) {
+  if (base.empty() || base == "invalid") return leaf;
+  if (base.back() == '/') return base + leaf;
+  return base + "/" + leaf;
+}
+
+std::string RealDataPath(const std::string& filename) {
+  return JoinPath(FLAGS_path_real_data, filename);
+}
+
+std::string UniformDataPath(const std::string& filename) {
+  return JoinPath(FLAGS_path_real_data, filename);
+}
+
+uint64_t ParseDatasetSizeCount(const std::string& size) {
+  if (size.empty()) return 0;
+  char suffix = size.back();
+  uint64_t multiplier = 1;
+  std::string number = size;
+  if (!std::isdigit(static_cast<unsigned char>(suffix))) {
+    number = size.substr(0, size.size() - 1);
+    suffix = static_cast<char>(std::toupper(static_cast<unsigned char>(suffix)));
+    if (suffix == 'K') {
+      multiplier = 1000ULL;
+    } else if (suffix == 'M') {
+      multiplier = 1000000ULL;
+    } else if (suffix == 'G') {
+      multiplier = 1000000000ULL;
+    } else {
+      fprintf(stderr, "invalid --dataset_size suffix '%c'\n", suffix);
+      exit(1);
+    }
+  }
+  errno = 0;
+  char* end = nullptr;
+  uint64_t value = strtoull(number.c_str(), &end, 10);
+  if (errno != 0 || end == number.c_str() || *end != '\0') {
+    fprintf(stderr, "invalid --dataset_size value '%s'\n", size.c_str());
+    exit(1);
+  }
+  return value * multiplier;
+}
+
+std::string NormalizeDatasetSizeSuffix(const std::string& size) {
+  if (size.empty()) return size;
+  if (!std::isdigit(static_cast<unsigned char>(size.back()))) {
+    std::string normalized = size;
+    normalized.back() = static_cast<char>(
+        std::toupper(static_cast<unsigned char>(normalized.back())));
+    return normalized;
+  }
+  uint64_t count = ParseDatasetSizeCount(size);
+  if (count % 1000000000ULL == 0) {
+    return std::to_string(count / 1000000000ULL) + "G";
+  }
+  if (count % 1000000ULL == 0) {
+    return std::to_string(count / 1000000ULL) + "M";
+  }
+  if (count % 1000ULL == 0) {
+    return std::to_string(count / 1000ULL) + "K";
+  }
+  return size;
+}
+
+std::string DatasetPrefix(const std::string& dataset) {
+  if (dataset == "osm") return "osm_cellids";
+  if (dataset == "book") return "books";
+  if (dataset == "wiki") return "wiki_ts";
+  if (dataset == "osm_cellids" || dataset == "books" ||
+      dataset == "fb" || dataset == "wiki_ts") {
+    return dataset;
+  }
+  fprintf(stderr,
+          "invalid --dataset='%s'; expected osm_cellids, osm, books, book, fb, wiki_ts, or wiki\n",
+          dataset.c_str());
+  exit(1);
+}
+
+std::string RealDatasetFileName() {
+  return DatasetPrefix(FLAGS_dataset) + "_" +
+         NormalizeDatasetSizeSuffix(FLAGS_dataset_size) + "_uint64";
+}
 
 // Helper for quickly generating random data.
 class RandomGenerator {
@@ -354,6 +484,83 @@ class Benchmark {
   int reads_;
   int heap_counter_;
 
+  void RequireRealDatasetFlags(Slice benchmark_name) {
+    if (FLAGS_dataset == nullptr || FLAGS_dataset[0] == '\0') {
+      fprintf(stderr, "%s requires --dataset=<osm_cellids|books|fb|wiki_ts>\n",
+              benchmark_name.ToString().c_str());
+      exit(1);
+    }
+    if (FLAGS_dataset_size == nullptr || FLAGS_dataset_size[0] == '\0') {
+      fprintf(stderr, "%s requires --dataset_size=<count|200M|400M|...>\n",
+              benchmark_name.ToString().c_str());
+      exit(1);
+    }
+    if (!FLAGS_num_was_set || FLAGS_num <= 0) {
+      fprintf(stderr, "%s requires explicit --num=<key_count>\n",
+              benchmark_name.ToString().c_str());
+      exit(1);
+    }
+  }
+
+  void LoadRealDatasetOrDie(Slice benchmark_name) {
+    RequireRealDatasetFlags(benchmark_name);
+    data.clear();
+
+    const std::string filename = RealDataPath(RealDatasetFileName());
+    std::ifstream input(filename, std::ios::binary);
+    if (!input.is_open()) {
+      fprintf(stderr, "error opening real dataset '%s'\n", filename.c_str());
+      exit(1);
+    }
+
+    uint64_t declared_count = 0;
+    if (!input.read(reinterpret_cast<char*>(&declared_count), sizeof(uint64_t))) {
+      fprintf(stderr, "real dataset '%s' is missing the uint64 count header\n",
+              filename.c_str());
+      exit(1);
+    }
+
+    const uint64_t expected_count =
+        ParseDatasetSizeCount(NormalizeDatasetSizeSuffix(FLAGS_dataset_size));
+    if (expected_count != 0 && declared_count != expected_count) {
+      fprintf(stderr,
+              "real dataset '%s' declares %llu keys, but --dataset_size expects %llu\n",
+              filename.c_str(),
+              static_cast<unsigned long long>(declared_count),
+              static_cast<unsigned long long>(expected_count));
+      exit(1);
+    }
+
+    data.reserve(static_cast<size_t>(declared_count));
+    uint64_t key = 0;
+    while (input.read(reinterpret_cast<char*>(&key), sizeof(uint64_t))) {
+      data.push_back(key);
+    }
+
+    if (data.size() != declared_count) {
+      fprintf(stderr,
+              "real dataset '%s' contains %llu keys after header, expected %llu\n",
+              filename.c_str(),
+              static_cast<unsigned long long>(data.size()),
+              static_cast<unsigned long long>(declared_count));
+      exit(1);
+    }
+
+    const int64_t required_keys = std::max<int64_t>(num_, reads_);
+    if (required_keys > static_cast<int64_t>(data.size())) {
+      fprintf(stderr,
+              "%s requires %lld keys, but dataset '%s' only contains %llu keys\n",
+              benchmark_name.ToString().c_str(),
+              static_cast<long long>(required_keys),
+              filename.c_str(),
+              static_cast<unsigned long long>(data.size()));
+      exit(1);
+    }
+
+    std::mt19937 gen(42);
+    std::shuffle(data.begin(), data.end(), gen);
+  }
+
   void PrintHeader() {
     const int kKeySize = 16;
     PrintEnvironment();
@@ -495,7 +702,7 @@ class Benchmark {
       } else if (name == Slice("uni40")) {
       uint64_t key;
       fresh_db = true;
-      input_file = "/mnt/datasets/uniform/keys_40m.txt";
+      input_file = UniformDataPath("keys_40m.txt");
       std::ifstream input; 
       input.open(input_file); 
       if (!input.is_open()) {
@@ -522,7 +729,7 @@ class Benchmark {
       uint64_t key;
       fresh_db = true;
   
-      input_file = "/mnt/datasets/data_set/data/osm_cellids_200M_uint64";
+      input_file = RealDataPath("osm_cellids_200M_uint64");
       std::ifstream input; 
       input.open(input_file, std::ios::binary); 
       if (!input.is_open()) {
@@ -542,7 +749,7 @@ class Benchmark {
       } else if (name == Slice("book_w")) {
       uint64_t key;
       fresh_db = true;
-      input_file = "/mnt/datasets/data_set/data/books_200M_uint64";
+      input_file = RealDataPath("books_200M_uint64");
       std::ifstream input; 
       input.open(input_file, std::ios::binary); 
       if (!input.is_open()) {
@@ -559,7 +766,7 @@ class Benchmark {
       }else if (name == Slice("fb_w")) {
       uint64_t key;
       fresh_db = true;
-      input_file = "/mnt/datasets/data_set/data/fb_200M_uint64";
+      input_file = RealDataPath("fb_200M_uint64");
       std::ifstream input; 
       input.open(input_file, std::ios::binary); 
       if (!input.is_open()) {
@@ -577,7 +784,7 @@ class Benchmark {
        else if (name == Slice("wiki_w")) {
       uint64_t key;
       fresh_db = true;
-      input_file = "/mnt/datasets/data_set/data/wiki_ts_200M_uint64";
+      input_file = RealDataPath("wiki_ts_200M_uint64");
       std::ifstream input; 
       input.open(input_file, std::ios::binary); 
       if (!input.is_open()) {
@@ -595,7 +802,7 @@ class Benchmark {
        uint64_t key;
       fresh_db = true;
   
-      input_file = "/mnt/datasets/data_set/data/osm_cellids_200M_uint64";
+      input_file = RealDataPath("osm_cellids_200M_uint64");
       std::ifstream input; 
       input.open(input_file, std::ios::binary); 
       if (!input.is_open()) {
@@ -614,7 +821,7 @@ class Benchmark {
       } else if (name == Slice("book_blanced")) {
               uint64_t key;
       fresh_db = true;
-      input_file = "/mnt/datasets/data_set/data/books_200M_uint64";
+      input_file = RealDataPath("books_200M_uint64");
       std::ifstream input; 
       input.open(input_file, std::ios::binary); 
       if (!input.is_open()) {
@@ -630,7 +837,7 @@ class Benchmark {
       }else if (name == Slice("fb_blanced")) {
       uint64_t key;
       fresh_db = true;
-      input_file = "/mnt/datasets/data_set/data/fb_200M_uint64";
+      input_file = RealDataPath("fb_200M_uint64");
       std::ifstream input; 
       input.open(input_file, std::ios::binary); 
       if (!input.is_open()) {
@@ -646,7 +853,7 @@ class Benchmark {
       }else if (name == Slice("wiki_blanced")) {
          uint64_t key;
       fresh_db = true;
-      input_file = "/mnt/datasets/data_set/data/wiki_ts_200M_uint64";
+      input_file = RealDataPath("wiki_ts_200M_uint64");
       std::ifstream input; 
       input.open(input_file, std::ios::binary); 
       if (!input.is_open()) {
@@ -704,6 +911,23 @@ class Benchmark {
         fresh_db = true;
         //  write_options_.sync = true;
         method = &Benchmark::WriteRandom;
+      } else if (name == Slice("fillrandom_r")) {
+        fresh_db = true;
+        LoadRealDatasetOrDie(name);
+        method = &Benchmark::real_workload_w;
+      } else if (name == Slice("readrandom_r")) {
+        LoadRealDatasetOrDie(name);
+        method = &Benchmark::real_workload_r;
+      } else if (name == Slice("balanced_r")) {
+        LoadRealDatasetOrDie(name);
+        method = &Benchmark::RealBalanced;
+      } else if (name == Slice("readheavy_r")) {
+        LoadRealDatasetOrDie(name);
+        method = &Benchmark::RealReadHeavy;
+      } else if (name == Slice("balanced")) {
+        method = &Benchmark::RandomBalanced;
+      } else if (name == Slice("readheavy")) {
+        method = &Benchmark::RandomReadHeavy;
       }  else if (name == Slice("zipwrite")) {
         fresh_db = true;
         method = &Benchmark::zipfian;
@@ -750,6 +974,12 @@ class Benchmark {
         method = &Benchmark::ReadWhileWriting;
       } else if (name == Slice("compact")) {
         method = &Benchmark::Compact;
+      } else if (name == Slice("flushmem")) {
+        method = &Benchmark::FlushMemTable;
+      } else if (name == Slice("compactl0")) {
+        method = &Benchmark::CompactLevel0;
+      } else if (name == Slice("waitbg")) {
+        method = &Benchmark::WaitBackground;
       } else if (name == Slice("crc32c")) {
         method = &Benchmark::Crc32c;
       } else if (name == Slice("snappycomp")) {
@@ -963,7 +1193,7 @@ class Benchmark {
     WriteBatch batch;
     Status s;
     int64_t bytes = 0;
-    // std::ofstream output_file("/home/eros/workspace-lsm/wildturkey/db/k_values.txt");
+    // std::ofstream output_file("db/k_values.txt");
     if (num_ != FLAGS_num) {
       char msg[100];
       snprintf(msg, sizeof(msg), "(%d ops)", num_);
@@ -995,7 +1225,7 @@ class Benchmark {
     WriteBatch batch;
     Status s;
     int64_t bytes = 0;
-    // std::ofstream output_file("/mnt/datasets/uniform/keys_64m.txt");
+    // std::ofstream output_file("data/keys_64m.txt");
     if (num_ != FLAGS_num) {
       char msg[100];
       snprintf(msg, sizeof(msg), "(%d ops)", num_);
@@ -1752,9 +1982,10 @@ class Benchmark {
    }
   // printf("num: %d\n", num_);
   thread->stats.AddBytes(bytes);
+  // if (adgMod::MOD==10 or adgMod::sst_size>=1 ){
+  //     static_cast<leveldb::DBImpl*>(db_)->CompactOrderdRange(nullptr, nullptr, 0);
+  //     }
   // printf("finish writing\n");
-  // input.close();
-  // static_cast<leveldb::DBImpl*>(db_)->CompactOrderdRange(nullptr, nullptr, 0);
 }
 
 
@@ -1794,6 +2025,113 @@ class Benchmark {
     char msg[100];
     snprintf(msg, sizeof(msg), "(%d of %d found)", found, num_);
     thread->stats.AddMessage(msg);
+  }
+
+  void RealMixed(ThreadState* thread, int read_percent, const char* label) {
+    static_cast<leveldb::DBImpl*>(db_)->WaitForBackground();
+    RandomGenerator gen;
+    ReadOptions options;
+    std::string value;
+    std::string the_key;
+    int64_t bytes = 0;
+    int64_t found = 0;
+    int64_t not_found = 0;
+    int64_t reads_done = 0;
+    int64_t writes_done = 0;
+
+    for (int i = 0; i < num_; i++) {
+      the_key = adgMod::generate_key(std::to_string(data[i]));
+      const int next_op = thread->rand.Next() % 100;
+
+      if (next_op < read_percent) {
+        if (db_->Get(options, the_key, &value).ok()) {
+          found++;
+          bytes += value.size() + the_key.length();
+        } else {
+          not_found++;
+        }
+        reads_done++;
+      } else {
+        db_->Put(write_options_, the_key, gen.Generate(value_size_));
+        bytes += value_size_ + the_key.length();
+        writes_done++;
+      }
+      thread->stats.FinishedSingleOp();
+    }
+
+    thread->stats.AddBytes(bytes);
+    char msg[160];
+    snprintf(msg, sizeof(msg),
+             "(workload:%s reads:%lld writes:%lld total:%d found:%lld not_found:%lld)",
+             label,
+             static_cast<long long>(reads_done),
+             static_cast<long long>(writes_done),
+             num_,
+             static_cast<long long>(found),
+             static_cast<long long>(not_found));
+    thread->stats.AddMessage(msg);
+  }
+
+  void RealBalanced(ThreadState* thread) {
+    RealMixed(thread, 50, "balanced");
+  }
+
+  void RealReadHeavy(ThreadState* thread) {
+    RealMixed(thread, 90, "read-heavy");
+  }
+
+  void RandomMixed(ThreadState* thread, int read_percent, const char* label) {
+    static_cast<leveldb::DBImpl*>(db_)->WaitForBackground();
+    RandomGenerator gen;
+    ReadOptions options;
+    std::string value;
+    char key[100];
+    int64_t bytes = 0;
+    int64_t found = 0;
+    int64_t not_found = 0;
+    int64_t reads_done = 0;
+    int64_t writes_done = 0;
+
+    for (int i = 0; i < num_; i++) {
+      const int k = thread->rand.Next() % FLAGS_num;
+      snprintf(key, sizeof(key), "%016d", k);
+      const int next_op = thread->rand.Next() % 100;
+
+      if (next_op < read_percent) {
+        if (db_->Get(options, key, &value).ok()) {
+          found++;
+          bytes += value.size() + strlen(key);
+        } else {
+          not_found++;
+        }
+        reads_done++;
+      } else {
+        db_->Put(write_options_, key, gen.Generate(value_size_));
+        bytes += value_size_ + strlen(key);
+        writes_done++;
+      }
+      thread->stats.FinishedSingleOp();
+    }
+
+    thread->stats.AddBytes(bytes);
+    char msg[160];
+    snprintf(msg, sizeof(msg),
+             "(workload:%s reads:%lld writes:%lld total:%d found:%lld not_found:%lld)",
+             label,
+             static_cast<long long>(reads_done),
+             static_cast<long long>(writes_done),
+             num_,
+             static_cast<long long>(found),
+             static_cast<long long>(not_found));
+    thread->stats.AddMessage(msg);
+  }
+
+  void RandomBalanced(ThreadState* thread) {
+    RandomMixed(thread, 50, "balanced");
+  }
+
+  void RandomReadHeavy(ThreadState* thread) {
+    RandomMixed(thread, 90, "read-heavy");
   }
 
 
@@ -2032,7 +2370,29 @@ void Get99PercentileLatency(ThreadState* /*thread*/) {
 
   void Compact(ThreadState* thread) { db_->CompactRange(nullptr, nullptr); }
 
+  void FlushMemTable(ThreadState* thread) {
+    reinterpret_cast<DBImpl*>(db_)->TEST_CompactMemTable();
+    thread->stats.FinishedSingleOp();
+  }
+
+  void CompactLevel0(ThreadState* thread) {
+    DBImpl* db_impl = reinterpret_cast<DBImpl*>(db_);
+    db_impl->CompactOrderdRange(nullptr, nullptr, 0);
+    db_impl->WaitForLearning();
+    thread->stats.FinishedSingleOp();
+  }
+
+  void WaitBackground(ThreadState* thread) {
+    DBImpl* db_impl = reinterpret_cast<DBImpl*>(db_);
+    db_impl->WaitForBackground();
+    db_impl->WaitForLearning();
+    thread->stats.FinishedSingleOp();
+  }
+
   void PrintStats(const char* key) {
+    DBImpl* db_impl = reinterpret_cast<DBImpl*>(db_);
+    db_impl->WaitForBackground();
+    db_impl->WaitForLearning();
     std::string stats;
     if (!db_->GetProperty(key, &stats)) {
       stats = "(failed)";
@@ -2065,6 +2425,7 @@ void Get99PercentileLatency(ThreadState* /*thread*/) {
 }  // namespace leveldb
 
 int main(int argc, char** argv) {
+  InstallCrashBacktraceHandler();
   FLAGS_write_buffer_size = leveldb::Options().write_buffer_size;
   FLAGS_max_file_size = leveldb::Options().max_file_size;
   FLAGS_block_size = leveldb::Options().block_size;
@@ -2090,6 +2451,7 @@ int main(int argc, char** argv) {
       FLAGS_reuse_logs = n;
     } else if (sscanf(argv[i], "--num=%d%c", &n, &junk) == 1) {
       FLAGS_num = n;
+      FLAGS_num_was_set = true;
     } else if (sscanf(argv[i], "--lsize=%d%c", &n, &junk) == 1) {
       adgMod::level_size = n;
     }else if (sscanf(argv[i], "--reads=%d%c", &n, &junk) == 1) {
@@ -2110,7 +2472,10 @@ int main(int argc, char** argv) {
       FLAGS_block_size = n;
     } else if (sscanf(argv[i], "--cache_size=%d%c", &n, &junk) == 1) {
       FLAGS_cache_size = n;
-    } else if (sscanf(argv[i], "--bloom_bits=%d%c", &n, &junk) == 1) {
+    } else if (sscanf(argv[i], "--always_learn=%d%c", &n, &junk) == 1) {
+      adgMod::AlwaysLearn = n;
+    }
+     else if (sscanf(argv[i], "--bloom_bits=%d%c", &n, &junk) == 1) {
       FLAGS_bloom_bits = n;
     } else if (sscanf(argv[i], "--open_files=%d%c", &n, &junk) == 1) {
       FLAGS_open_files = n;
@@ -2147,6 +2512,10 @@ int main(int argc, char** argv) {
       FLAGS_use_real_data = n;
     } else if (leveldb::Slice(argv[i]).starts_with("--path_real_data=")) {
       FLAGS_path_real_data = argv[i] + strlen("--path_real_data=");
+    } else if (leveldb::Slice(argv[i]).starts_with("--dataset=")) {
+      FLAGS_dataset = argv[i] + strlen("--dataset=");
+    } else if (leveldb::Slice(argv[i]).starts_with("--dataset_size=")) {
+      FLAGS_dataset_size = argv[i] + strlen("--dataset_size=");
     }else {
       fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       exit(1);

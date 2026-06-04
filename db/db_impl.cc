@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <set>
 #include <string>
 #include <vector>
@@ -174,7 +175,6 @@ DBImpl::~DBImpl() {
   // }
 
   // //versions_->current()->WriteLevelModel();
-  mutex_.Lock();
   // shutting_down_.store(true, std::memory_order_release);
   // while (background_compaction_scheduled_) {
   //   background_work_finished_signal_.Wait();
@@ -193,10 +193,12 @@ DBImpl::~DBImpl() {
   // // //adgMod::learn_cb_model->Report();
   // }
 
+  env_->WaitForLearning();
+  shutting_down_.store(true, std::memory_order_release);
 
-  if (adgMod::MOD >= 7) {
-    CompactMemTable(imm_);
-    CompactMemTable(mem_);
+  mutex_.Lock();
+  while (background_compaction_scheduled_) {
+    background_work_finished_signal_.Wait();
   }
 
   mutex_.Unlock();
@@ -336,7 +338,7 @@ void DBImpl::DeleteObsoleteFiles() {
         file_stat.Finish();
 
         
-      //  std::string filename = "/home/eros/workspace-lsm/wildturkey/vldb/lifetime1/64output_keys_level_" + std::to_string(file_stat.level) + ".txt";
+      //  std::string filename = "vldb/lifetime1/64output_keys_level_" + std::to_string(file_stat.level) + ".txt";
        
       //  std::ofstream output_file(filename, std::ios::out | std::ios::app);
 
@@ -660,19 +662,12 @@ int DBImpl::CompactMemTable() {
   }
 
     auto time = instance->PauseTimer(16, true);
-    int level = edit.new_files_[0].first;
+    int level = edit.new_files_.empty() ? 0 : edit.new_files_[0].first;
     // printf("level: %d\n", level);
     
-    // if (adgMod::MOD == 7){
-    // adgMod::compaction_counter_mutex.Lock();
-    // adgMod::events[0].push_back(new CompactionEvent(time, to_string(level)));
-    // adgMod::levelled_counters[0].Increment(0, time.second - time.first);
-    // // adgMod::levelled_counters[2].Increment(level);
-    // adgMod::compaction_counter_mutex.Unlock();
-    
-    // env_->PrepareLearning(time.second, level, new FileMetaData(edit.new_files_[0].second));
-    
-    // }
+    if (s.ok() && adgMod::MOD >= 7 && !edit.new_files_.empty()) {
+      env_->PrepareLearning(time.second, level, new FileMetaData(edit.new_files_[0].second));
+    }
 
 
   return level;
@@ -857,22 +852,22 @@ void DBImpl::BackgroundCompaction() {
   Compaction* c;
   bool is_manual = (manual_compaction_ != nullptr);
   InternalKey manual_end;
-  // if (is_manual) {
-  //   ManualCompaction* m = manual_compaction_;
-  //   c = versions_->CompactRange(m->level, m->begin, m->end);
-  //   m->done = (c == nullptr);
-  //   if (c != nullptr) {
-  //     manual_end = c->input(0, c->num_input_files(0) - 1)->largest;
-  //   }
-  //   Log(options_.info_log,
-  //       "Manual compaction at level-%d from %s .. %s; will stop at %s\n",
-  //       m->level, (m->begin ? m->begin->DebugString().c_str() : "(begin)"),
-  //       (m->end ? m->end->DebugString().c_str() : "(end)"),
-  //       (m->done ? "(end)" : manual_end.DebugString().c_str()));
-  // } else {
+  if (is_manual) {
+    ManualCompaction* m = manual_compaction_;
+    c = versions_->CompactRange(m->level, m->begin, m->end);
+    m->done = (c == nullptr);
+    if (c != nullptr) {
+      manual_end = c->input(0, c->num_input_files(0) - 1)->largest;
+    }
+    Log(options_.info_log,
+        "Manual compaction at level-%d from %s .. %s; will stop at %s\n",
+        m->level, (m->begin ? m->begin->DebugString().c_str() : "(begin)"),
+        (m->end ? m->end->DebugString().c_str() : "(end)"),
+        (m->done ? "(end)" : manual_end.DebugString().c_str()));
+  } else {
     c = versions_->PickCompaction();
     // //c = versions_->PickCompaction_titred();
-  // }
+  }
 
   Status status;
   if (c == nullptr) {
@@ -1893,6 +1888,27 @@ bool DBImpl::GetProperty(const Slice& property, std::string* value) {
   std::cout << "Total compaction WA: " << total_wa << std::endl;
   std::cout << "Remain disk data:" <<  NumLevelBytes_total << std::endl;
   std::cout << "Write data in disk:" << bytes_written_total/1024/1024 << std::endl;
+  std::set<uint64_t> live_model_files;
+  versions_->AddLiveFiles(&live_model_files);
+  const auto live_model_stats =
+      adgMod::file_data->LiveModelStats(live_model_files);
+	  std::cout << "ModelTrainingStats model_bytes="
+	            << live_model_stats.bytes
+	            << " training_ns="
+	            << adgMod::model_training_stats.training_ns.load(std::memory_order_relaxed)
+	            << " rl_ns="
+	            << adgMod::model_training_stats.rl_ns.load(std::memory_order_relaxed)
+	            << " model_count="
+	            << live_model_stats.count
+	            << " live_training_ns="
+	            << live_model_stats.training_ns
+	            << " live_rl_ns="
+	            << live_model_stats.rl_ns
+	            << " trained_model_bytes="
+	            << adgMod::model_training_stats.model_bytes.load(std::memory_order_relaxed)
+            << " trained_model_count="
+            << adgMod::model_training_stats.model_count.load(std::memory_order_relaxed)
+            << std::endl;
   //versions_->current()->PrintAll();
 
 
@@ -1906,9 +1922,11 @@ bool DBImpl::GetProperty(const Slice& property, std::string* value) {
       
     //       // adgMod::learn_cb_model->Report();
     // }
-    adgMod::Stats* instance = adgMod::Stats::GetInstance();
-    instance->ReportTime();
-    adgMod::learn_cb_model->Report();
+    if (std::getenv("WT_SKIP_LEARNED_REPORT") == nullptr) {
+      adgMod::Stats* instance = adgMod::Stats::GetInstance();
+      instance->ReportTime();
+      adgMod::learn_cb_model->Report();
+    }
 
 
     // PrintFileInfo();
@@ -1989,9 +2007,10 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   // adgMod::file_model_error =8;
   
   adgMod::env = options.env;
+  adgMod::block_size = options.block_size;
   adgMod::file_data = new adgMod::FileLearnedIndexData();
   adgMod::learn_cb_model = new CBModel_Learn();
-  adgMod::getQTableManagerInstance().initQTable(); //Qtable初始化
+  adgMod::getQTableManagerInstance().initQTable(options.block_size); //Qtable初始化
 
   DBImpl* impl = new DBImpl(options, dbname);
   impl->mutex_.Lock();
@@ -2115,6 +2134,10 @@ void DBImpl::WaitForBackground() {
     while (background_compaction_scheduled_) {
         background_work_finished_signal_.Wait();
     }
+}
+
+void DBImpl::WaitForLearning() {
+    env_->WaitForLearning();
 }
 
 

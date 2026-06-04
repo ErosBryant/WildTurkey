@@ -16,6 +16,7 @@
 #include <cstdlib>   // rand() 和 srand()
 #include <ctime>     // time()
 #include "Q_table.h"
+#include <set>
 #include <random>
 #include <memory>
 
@@ -31,6 +32,13 @@ using leveldb::FileMetaData;
 namespace adgMod {
 
     class LearnedIndexData;
+
+    struct ModelLiveStats {
+        uint64_t bytes = 0;
+        uint64_t count = 0;
+        uint64_t training_ns = 0;
+        uint64_t rl_ns = 0;
+    };
 
     // An array collecting the total number of keys in a level in or before each file. One per level.
     // Used to get the target file when a level model produces the predicted position in the level. 
@@ -102,11 +110,13 @@ namespace adgMod {
         uint64_t size;
         uint64_t inverse_density;
         int8_t state;
-        uint64_t load_model_time;
-        uint64_t correct_time;
-        uint64_t build_time;
-        double error_bound;
-        double recursive_error_bound;
+	        uint64_t load_model_time;
+	        uint64_t correct_time;
+	        uint64_t build_time;
+	        uint64_t training_time_ns;
+	        uint64_t rl_time_ns;
+	        double error_bound;
+	        double recursive_error_bound;
 
 
         // // Q-table 由state-error_bound对以及model_load和correct_time还有build_time组成
@@ -147,7 +157,12 @@ namespace adgMod {
 
         explicit LearnedIndexData(int allowed_seek, bool level_model) 
         : error(level_model?level_model_error:file_model_error), learned(false), aborted(false), learning(false),
-             learned_not_atomic(false),check_loaded(false), allowed_seek(allowed_seek), current_seek(0), filled(false), is_level(level_model), level(0), served(0), cost(0) {};
+	             learned_not_atomic(false),check_loaded(false), allowed_seek(allowed_seek), current_seek(0), filled(false),
+	             is_level(level_model), index_layer_count(0), min_key(0), max_key(0), size(0), inverse_density(0),
+	             state(0), load_model_time(0), correct_time(0), build_time(0),
+	             training_time_ns(0), rl_time_ns(0),
+	             error_bound(level_model?level_model_error:file_model_error), recursive_error_bound(3),
+	             level(0), served(0), cost(0), meta(nullptr) {};
         LearnedIndexData(const LearnedIndexData& other) = delete;
 
         // Inference function. Return the predicted interval.
@@ -171,7 +186,11 @@ namespace adgMod {
 
         // writing this model to disk and load this model from disk
         void WriteModel(const string& filename);
-        void ReadModel(const string& filename);
+	        void ReadModel(const string& filename);
+	        bool HasUsableModel() const;
+	        uint64_t ModelBytes() const;
+	        uint64_t TrainingTimeNs() const { return training_time_ns; }
+	        uint64_t RlTimeNs() const { return rl_time_ns; }
         
         // print model stats
         void ReportStats();
@@ -202,6 +221,7 @@ namespace adgMod {
         std::shared_ptr<LearnedIndexData> GetModel(int number);
         std::shared_ptr<LearnedIndexData> PeekModel(int number);
         void ReleaseModel(int number);
+	        ModelLiveStats LiveModelStats(const std::set<uint64_t>& live_files);
         void Report();
          int num_segments=0;
         ~FileLearnedIndexData();

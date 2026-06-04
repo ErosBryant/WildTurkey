@@ -85,6 +85,7 @@ virtual void CompactOrderdRange(const Slice* begin, const Slice* end, int max_le
   Version* GetCurrentVersion();
   void ReturnCurrentVersion(Version* version);
   void WaitForBackground();
+  void WaitForLearning();
   std::atomic<int> version_count;
   adgMod::VLog* vlog;
 

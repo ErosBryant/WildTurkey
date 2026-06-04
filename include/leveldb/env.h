@@ -193,6 +193,8 @@ class LEVELDB_EXPORT Env {
   virtual void SleepForMicroseconds(int micros) = 0;
 
   virtual void ClearPendingLearning() {};
+  virtual void ShutdownLearning() {};
+  virtual void WaitForLearning() {};
   virtual void ScheduleLearning(void (*background_work_function)(void*), void* background_work_arg, int priority) {};
   virtual void NewRandomAccessFileLearned(const std::string& filename, RandomAccessFile** result) {};
   virtual void PrepareLearning(uint64_t time_start, int level, FileMetaData* meta) {};

@@ -16,6 +16,37 @@ namespace adgMod {
 
     Stats* Stats::singleton = nullptr;
 
+    namespace {
+        const char* TimerName(size_t id) {
+            static const char* const names[] = {
+                "FindFiles",
+                "LoadIB+FB/Table",
+                "SearchIB",
+                "SearchDB",
+                "WorkloadRead",
+                "LoadDB",
+                "SSTableLookup",
+                "Compaction",
+                "LoadFileModel",
+                "ReadTrace",
+                "WriteTrace",
+                "FileLearning",
+                "ReadValue",
+                "LevelSSTableRead",
+                "MemTableLookup",
+                "SearchFB",
+                "CompactMemTable",
+                "PredictPosition",
+                "LoadDB+Correction",
+                "CorrectionSearch"
+            };
+            if (id < sizeof(names) / sizeof(names[0])) {
+                return names[id];
+            }
+            return "Unassigned";
+        }
+    }
+
     Stats::Stats() : timers(20, Timer{}), initial_time(__rdtsc()) {
         levelled_counters[0].name = "LevelModel";
         levelled_counters[1].name = "FileModel";
@@ -63,7 +94,7 @@ namespace adgMod {
     void Stats::ReportTime() {
         for (int i = 0; i < timers.size(); ++i) {
            // printf("Timer %u: %lu : %f\n", i, timers[i].Time(), timers[i].Time()/1000000000);
-           printf("Timer %u: %lu : %.9f\n", i, timers[i].Time(), timers[i].Time()/1000000000.0);
+           printf("Timer %u: %lu : %.9f (%s)\n", i, timers[i].Time(), timers[i].Time()/1000000000.0, TimerName(i));
 
         }
     }

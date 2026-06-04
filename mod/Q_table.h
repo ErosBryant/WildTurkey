@@ -9,19 +9,23 @@
 #include <deque>
 #include <set>
 #include <string>
+#include <array>
+#include <cstdint>
+#include <limits>
 
 namespace adgMod {
 
+    constexpr int kErrorIdBuckets = 4;
+    constexpr int kErrorLatencyBuckets = 3;
+    constexpr int kErrorQStates = kErrorIdBuckets * kErrorLatencyBuckets;
+    constexpr int kErrorWarmupSSTables = 100;
+
+    const std::vector<double>& ErrorBoundActions();
+    std::vector<double> ErrorBoundActionsForBlockSize(uint64_t block_size);
+
     struct QTableEntry {
         std::unordered_map<double, double> q_values;                // 动作到 Q 值的映射
-        std::unordered_map<double, double> min_load_model_cost;     // 每个 action 的最小 load 成本
-        std::unordered_map<double, double> max_load_model_cost;     // 每个 action 的最大 load 成本
-        std::unordered_map<double, int> min_layer_cost;             // 每个 action 的最小层数成本
-        std::unordered_map<double, int> max_layer_cost;             // 每个 action 的最大层数成本
-        std::unordered_map<double, double> min_error_bound;         // 最小误差界限
-        std::unordered_map<double, double> max_error_bound;         // 最大误差界限
         std::unordered_map<double, int> visit_counts;               // 访问次数
-        uint64_t max_sst_size = 0;                                  // 最大 SSTable 大小
         double last_action = 16.0;                                  // 上一次动作
     };
 
@@ -43,20 +47,37 @@ namespace adgMod {
             std::vector<QTableEntry> Q_table;
             Qtable_sar Q_table_sar;
             std::vector<Experience> replay_buffer;
+            std::vector<double> error_bound_actions;
             const size_t max_replay_size = 100; // 经验回放窗口 100
             const size_t batch_size = 32;
 
-            // ID 量化边界
+            // ID bucket boundaries, fixed after the warm-up window.
             double ID_min = 0.0;
             double ID_1   = 0.0;
             double ID_2   = 0.0;
             double ID_3   = 0.0;
             double ID_max = 0.0;
+            bool id_bounds_fixed = false;
+            size_t id_observations = 0;
 
-            // 滑动历史用于防止早期 ID 异常
-            static constexpr size_t HISTORY_SIZE = 100;
+            static constexpr size_t HISTORY_SIZE = kErrorWarmupSSTables;
             std::deque<double> id_history;           // 记录最近的 ID 历史
             std::multiset<double> id_set;            // 用于快速获取 min/max
+            std::array<double, kErrorIdBuckets> latency_ema;
+            std::array<double, kErrorIdBuckets> latency_min;
+            std::array<double, kErrorIdBuckets> latency_max;
+            std::array<bool, kErrorIdBuckets> latency_seen;
+
+            struct CostBounds {
+                double min_load = std::numeric_limits<double>::max();
+                double max_load = std::numeric_limits<double>::lowest();
+                double min_pred = std::numeric_limits<double>::max();
+                double max_pred = std::numeric_limits<double>::lowest();
+                double min_corr = std::numeric_limits<double>::max();
+                double max_corr = std::numeric_limits<double>::lowest();
+                uint64_t max_keys = 0;
+            };
+            CostBounds cost_bounds;
 
             // QTableManager 初始化
             QTableManager();
@@ -66,12 +87,11 @@ namespace adgMod {
 
             // 计算 reward
             double compute_reward(
-                int state,                // 当前档位
                 double action,            // error bound
-                double new_load_model_cost,
-                int layer_count,
-                uint64_t sstable_size,
-                int level
+                double load_cost,
+                double pred_cost,
+                double corr_cost,
+                uint64_t key_count
             );
 
             double getLearningRate(int state, double action);
@@ -86,7 +106,7 @@ namespace adgMod {
             double getErrorBound(int state) const;
 
             // 初始化 Q-table
-            void initQTable();
+            void initQTable(uint64_t block_size = 0);
 
             // 获取 next_state
             int getNextState(const std::vector<std::string>& string_keys) const;
@@ -97,16 +117,17 @@ namespace adgMod {
             // 从回放缓冲区学习
             void learnFromReplay();
 
+            int ObserveID(double inverse_density);
+            int ComposeState(int id_bucket, int latency_bucket) const;
+            int LatencyBucket(int id_bucket) const;
+            int ObserveLatencyAndGetState(int id_bucket, double lookup_cost);
+
             // 处理新的 SSTable inverse density 并更新状态边界
             void onNewSSTableID(double inverse_density) {
-                if (id_history.size() == HISTORY_SIZE) {
-                    double old = id_history.front();
-                    id_history.pop_front();
-                    auto it = id_set.find(old);
-                    if (it != id_set.end()) id_set.erase(it);
-                }
+                if (id_bounds_fixed) return;
                 id_history.push_back(inverse_density);
                 id_set.insert(inverse_density);
+                id_observations++;
 
                 ID_min = *id_set.begin();
                 ID_max = *id_set.rbegin();
@@ -115,6 +136,10 @@ namespace adgMod {
                 ID_1 = ID_min + span;
                 ID_2 = ID_min + 2 * span;
                 ID_3 = ID_min + 3 * span;
+
+                if (id_observations >= HISTORY_SIZE) {
+                    id_bounds_fixed = true;
+                }
             }
         };
 

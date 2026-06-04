@@ -38,6 +38,7 @@ namespace adgMod {
     bool restart_read = false;
     bool fresh_write = false;
     bool reopen = false;
+    bool AlwaysLearn = 0;
 
     // the time we wait before learning (as the file may die within this short time and
     // if we learn, we waste the learning)
@@ -46,6 +47,7 @@ namespace adgMod {
     int policy = 0;
     std::atomic<int> num_read(0);
     std::atomic<int> num_write(0);
+    ModelTrainingStats model_training_stats;
 
     int file_allowed_seek = 10;
     int level_allowed_seek = 1;

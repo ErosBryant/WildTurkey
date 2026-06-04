@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -24,7 +25,6 @@ constexpr double kGamma = 0.9;
 constexpr double kEpsilonStart = 0.9;
 constexpr double kEpsilonMin = 0.01;
 constexpr double kEpsilonDecay = 0.008;
-constexpr const char* kReportPath = "report.csv";
 constexpr double kRangeEps = 1e-9;
 constexpr double kPreferenceWeight = 0.4;
 constexpr double kSmallDegreeBonus = 0.6;
@@ -36,6 +36,23 @@ struct PreferredRange {
   int min_deg;
   int max_deg;
 };
+
+std::string JoinPath(const std::string& base, const std::string& leaf) {
+  if (base.empty()) return leaf;
+  if (base.back() == '/') return base + leaf;
+  return base + "/" + leaf;
+}
+
+const std::string& ReportPath() {
+  static const std::string path = [] {
+    const char* log_dir = std::getenv("WT_LOG_DIR");
+    if (log_dir != nullptr && log_dir[0] != '\0') {
+      return JoinPath(log_dir, "report.csv");
+    }
+    return std::string("report.csv");
+  }();
+  return path;
+}
 
 constexpr std::array<PreferredRange, leveldb::config::kNumLevels>
     kPreferredDegreeRanges = {{
@@ -171,7 +188,7 @@ void AppendReportRow(int level, IopsState from_state, IopsState to_state,
   if (!report_initialized) {
     mode = std::ios::out | std::ios::trunc;
   }
-  std::ofstream ofs(kReportPath, mode);
+  std::ofstream ofs(ReportPath(), mode);
   if (!ofs.is_open()) {
     return;
   }

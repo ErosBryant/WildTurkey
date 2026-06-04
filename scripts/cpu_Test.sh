@@ -1,6 +1,10 @@
 #!/bin/bash
 
-python3 ./test.py testing start 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DB_BENCH="${DB_BENCH:-${BASE_DIR}/build/db_bench}"
+
+python3 "${SCRIPT_DIR}/test.py" testing start 
 
 # Define the desired --num values in an array
 nums=(20000000)
@@ -8,8 +12,7 @@ mod=(7 8)
 number_of_runs=1
 
 current_time=$(date "+%Y%m%d-%H%M%S")
-output_dir="/mnt/analysis_bourbon/cpu/"
-test_dir="/home/eros/workspace-lsm/wildturkey/build/"
+output_dir="${OUT_DIR:-${BASE_DIR}/build/cpu_runs/}"
 
 # Create output directories if they do not exist
 if [ ! -d "$output_dir" ]; then
@@ -30,7 +33,7 @@ for num in "${nums[@]}"; do
 
          
          # fillrandom,readrandom,stats
-         ${test_dir}/db_bench --benchmarks="zipwrite,zipread,stats" --mod=$md  --num=$num > "$output_file" &
+         "${DB_BENCH}" --benchmarks="zipwrite,zipread,stats" --mod=$md  --num=$num > "$output_file" &
          db_bench_pid=$!
       
 
@@ -84,4 +87,4 @@ plt.grid()
 plt.savefig("${output_dir}cpu_usage_${current_time}.png")  # GUI 없이 파일로 저장
 EOF
 
-python3 ./test.py testing end
+python3 "${SCRIPT_DIR}/test.py" testing end

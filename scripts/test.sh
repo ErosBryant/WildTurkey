@@ -1,5 +1,10 @@
+#!/bin/bash
 
-python3 ./test.py testing start 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DB_BENCH="${DB_BENCH:-${BASE_DIR}/build/db_bench}"
+
+python3 "${SCRIPT_DIR}/test.py" testing start 
 # Define the desired --num values in an array
 nums=(1000000)
 
@@ -24,9 +29,8 @@ mods=(7)
 
 current_time=$(date "+%Y%m%d-%H%M%S")
 
-output_dir="/home/eros/workspace-lsm/wildturkey/test_result/$current_time/"
-test_dir="/home/eros/workspace-lsm/wildturkey/build/"
-db_data_dir="/home/eros/workspace-lsm/wildturkey/db_dir"
+output_dir="${OUT_DIR:-${BASE_DIR}/build/test_result/$current_time/}"
+db_data_dir="${DB_DIR:-${BASE_DIR}/build/db_dir}"
 
 if [ ! -d "$db_data_dir" ]; then
    mkdir -p "$db_data_dir"
@@ -45,7 +49,7 @@ for num in "${nums[@]}"; do
          for sst_base in "${sst_base_size[@]}"; do
             for i in $(seq 1 $number_of_runs); do
 
-               # db_data_dir="/home/eros/workspace-lsm/wildturkey/db_dir_${i}"
+               # db_data_dir="${BASE_DIR}/build/db_dir_${i}"
 
                # if [ ! -d "$db_data_dir" ]; then
                #    mkdir -p "$db_data_dir"
@@ -74,10 +78,10 @@ for num in "${nums[@]}"; do
 # --db=$db_data_dir
                # Run db_bench with resource limitations via systemd
                # sudo systemd-run --unit=db_bench_run_${i} --scope -p CPUQuota=50% -p MemoryMax=512M \
-               ${test_dir}/db_bench --benchmarks="fillrandom,readrandom,stats" \
+               "${DB_BENCH}" --benchmarks="fillrandom,readrandom,stats" \
                --max_file_size=${sst_base} --value_size=$value --mod=$mod --num=$num >> "$output_file" &
                db_bench_pid=$!
-                # ${test_dir}/db_bench --benchmarks="${rwork},real_r,stats"  --max_file_size=${sst_base} --mod=$mod --num=$num --db=$db_data_dir >> "$output_file"
+                # "${DB_BENCH}" --benchmarks="${rwork},real_r,stats"  --max_file_size=${sst_base} --mod=$mod --num=$num --db=$db_data_dir >> "$output_file"
                
 
                # Check if cgroup was created
@@ -117,7 +121,7 @@ for num in "${nums[@]}"; do
    done
 done
 
-python3 ./test.py testing end
+python3 "${SCRIPT_DIR}/test.py" testing end
 
 
 

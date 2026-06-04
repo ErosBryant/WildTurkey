@@ -1,12 +1,14 @@
 #include "Q_table.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <random>
+#include <vector>
 
 template <typename T>
-inline const T& clamp(const T& val, const T& low, const T& high)
+inline T clamp(const T& val, const T& low, const T& high)
 {
     if (val < low) {
         return low;
@@ -19,92 +21,78 @@ inline const T& clamp(const T& val, const T& low, const T& high)
 
 namespace adgMod {
 
+    const std::vector<double>& ErrorBoundActions() {
+        static const std::vector<double> actions =
+            {4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64};
+        return actions;
+    }
+
+    std::vector<double> ErrorBoundActionsForBlockSize(uint64_t block_size) {
+        std::vector<double> actions;
+        const double max_action = (block_size > 0 && block_size <= 4096) ? 44.0 : 64.0;
+        for (double action : ErrorBoundActions()) {
+            if (action <= max_action) {
+                actions.push_back(action);
+            }
+        }
+        return actions.empty() ? ErrorBoundActions() : actions;
+    }
+
     QTableManager::QTableManager() {
+        error_bound_actions = ErrorBoundActionsForBlockSize(0);
+        latency_ema.fill(0.0);
+        latency_min.fill(std::numeric_limits<double>::infinity());
+        latency_max.fill(-std::numeric_limits<double>::infinity());
+        latency_seen.fill(false);
     }
 
     double QTableManager::getLearningRate(int state, double action)
     {
-        int    n         = Q_table[state].visit_counts[action];
-        double alpha0    = 0.3;        // 初始步长
-        double alpha_min = 0.02;       // 下限
-
-        double alpha = alpha0 / std::sqrt(n + 1.0);
-
-        return std::max(alpha, alpha_min);
+        int n = Q_table[state].visit_counts[action];
+        return 1.0 / std::max(1, n);
     }
 
     double QTableManager::compute_reward(
-        int      state,
         double   action,
         double   load_cost,
-        int      layer_count,
-        uint64_t sstable_size,
-        int      level
+        double   pred_cost,
+        double   corr_cost,
+        uint64_t key_count
     )
     {
-        constexpr double w1  = 0.30;          // weight: load_cost
-        constexpr double w2  = 0.50;          // weight: layer_count
-        constexpr double w3  = 0.2;           // weight: error_bound
-        constexpr double wp  = 0.65;          // weight: size penalty
-        constexpr double wl  = 0.25;          // weight: level penalty
-        constexpr int    MAX_LSM_LEVEL = 3;   // deepest level that matters (L0~L3)
+        (void)action;
+        CostBounds& bounds = cost_bounds;
+        if (bounds.min_load == std::numeric_limits<double>::max()) {
+            bounds.min_load = bounds.max_load = load_cost;
+            bounds.min_pred = bounds.max_pred = pred_cost;
+            bounds.min_corr = bounds.max_corr = corr_cost;
+        }
+        bounds.min_load = std::min(bounds.min_load, load_cost);
+        bounds.max_load = std::max(bounds.max_load, load_cost);
+        bounds.min_pred = std::min(bounds.min_pred, pred_cost);
+        bounds.max_pred = std::max(bounds.max_pred, pred_cost);
+        bounds.min_corr = std::min(bounds.min_corr, corr_cost);
+        bounds.max_corr = std::max(bounds.max_corr, corr_cost);
+        bounds.max_keys = std::max(bounds.max_keys, key_count);
 
-        auto &entry       = Q_table[state];
-        uint64_t &max_sst = entry.max_sst_size;
-        max_sst = std::max(max_sst, sstable_size);
+        auto normalize = [](double value, double min_value, double max_value) {
+            const double delta = max_value - min_value;
+            if (delta <= 1e-12) return 0.0;
+            return clamp((value - min_value) / delta, 0.0, 1.0);
+        };
 
-        double &min_load = entry.min_load_model_cost[action];
-        double &max_load = entry.max_load_model_cost[action];
-        int    &min_layer= entry.min_layer_cost[action];
-        int    &max_layer= entry.max_layer_cost[action];
-        double &min_err  = entry.min_error_bound[action];
-        double &max_err  = entry.max_error_bound[action];
+        const double norm_load = normalize(load_cost, bounds.min_load, bounds.max_load);
+        const double norm_pred = normalize(pred_cost, bounds.min_pred, bounds.max_pred);
+        const double norm_corr = normalize(corr_cost, bounds.min_corr, bounds.max_corr);
+        const double r_cost = 1.0 - (norm_load + norm_pred + norm_corr) / 3.0;
 
-        if (min_load  == std::numeric_limits<double>::max()) min_load  = max_load  = load_cost;
-        if (min_layer == std::numeric_limits<int>::max())    min_layer = max_layer = layer_count;
-        if (min_err   == std::numeric_limits<double>::max()) min_err   = max_err   = action;
-
-        min_load  = std::min(min_load,  load_cost);
-        max_load  = std::max(max_load,  load_cost);
-        min_layer = std::min(min_layer, layer_count);
-        max_layer = std::max(max_layer, layer_count);
-        min_err   = std::min(min_err,   action);
-        max_err   = std::max(max_err,   action);
-
-        double load_range  = std::max(1e-12, max_load  - min_load);
-        double layer_range = std::max(1e-12, double(max_layer - min_layer));
-        // Normalize error bound with a fixed global span to keep it influential
-        // even when a new action is sampled.
-        const double err_min = 4.0;
-        const double err_max = 48.0;
-        const double err_range = err_max - err_min;
-
-        double norm_load   = (load_cost   - min_load)   / load_range;
-        double norm_layer  = (layer_count - min_layer)  / layer_range;
-        double norm_error  = (action      - err_min)    / err_range;
-        norm_error = clamp(norm_error, 0.0, 1.0);
-
-        double cost_sum = w1 * norm_load
-                        + w2 * norm_layer
-                        + w3 * norm_error;
-        double u_base   = 1.0 - cost_sum;
-
-        double inv_size_pen = std::log(double(max_sst) / double(sstable_size))
-                            / std::log(32.0);
-        inv_size_pen = std::pow(inv_size_pen, 1.5);
-        inv_size_pen = clamp(inv_size_pen, 0.0, 1.0);
-
-        int    lvl_clamped   = std::min(level, MAX_LSM_LEVEL);
-        double norm_level_pen= 1.0 - (double)lvl_clamped / MAX_LSM_LEVEL;
-        double level_pen     = wl * norm_level_pen;
-
-        double r = u_base
-                - wp * inv_size_pen
-                - level_pen;
-        if (level >= 3) r += 0.08;
-
-        r = clamp(r, -(wp + wl), 1.0);
-        return r;
+        double size_penalty = 0.0;
+        if (bounds.max_keys > 0 && key_count > 0) {
+            size_penalty = 1.0 - std::log(static_cast<double>(key_count) + 1.0) /
+                                     std::log(static_cast<double>(bounds.max_keys) + 1.0);
+            size_penalty = clamp(size_penalty, 0.0, 1.0);
+        }
+        return r_cost - size_penalty;
     }
 
     double QTableManager::get_max_future_q(int next_state) const {
@@ -138,7 +126,7 @@ namespace adgMod {
         const double action = std::round(action_raw * 1e4) / 1e4;
 
         const double alpha  = getLearningRate(state, action);
-        const double gamma  = 0.9;
+        const double gamma  = std::pow(2.0, -1.0 / 3.0);
 
         double& prev_q = Q_table[state].q_values[action];
 
@@ -207,22 +195,69 @@ namespace adgMod {
         }
     }
 
-    void QTableManager::initQTable() {
-        Q_table.resize(8);
-        std::vector<int> actions = {4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48};
+    void QTableManager::initQTable(uint64_t block_size) {
+        Q_table.clear();
+        Q_table.resize(kErrorQStates);
+        error_bound_actions = ErrorBoundActionsForBlockSize(block_size);
+        cost_bounds = CostBounds();
+        id_history.clear();
+        id_set.clear();
+        id_bounds_fixed = false;
+        id_observations = 0;
+        latency_ema.fill(0.0);
+        latency_min.fill(std::numeric_limits<double>::infinity());
+        latency_max.fill(-std::numeric_limits<double>::infinity());
+        latency_seen.fill(false);
         for (auto& entry : Q_table) {
-            for (double action : actions) {
+            for (double action : error_bound_actions) {
                 entry.q_values[action] = 0.0;
-                entry.min_load_model_cost[action] = std::numeric_limits<double>::max();
-                entry.max_load_model_cost[action] = std::numeric_limits<double>::lowest();
-                entry.min_layer_cost[action] = std::numeric_limits<double>::max();
-                entry.max_layer_cost[action] = std::numeric_limits<double>::lowest();
-                entry.min_error_bound[action] = std::numeric_limits<double>::max();
-                entry.max_error_bound[action] = std::numeric_limits<double>::lowest();
                 entry.visit_counts[action] = 0;
                 entry.last_action = 16.0;
             }
         }
+    }
+
+    int QTableManager::ObserveID(double inverse_density) {
+        onNewSSTableID(inverse_density);
+        if (ID_max <= ID_min) return 0;
+        if (inverse_density < ID_1) return 0;
+        if (inverse_density < ID_2) return 1;
+        if (inverse_density < ID_3) return 2;
+        return 3;
+    }
+
+    int QTableManager::ComposeState(int id_bucket, int latency_bucket) const {
+        id_bucket = std::max(0, std::min(kErrorIdBuckets - 1, id_bucket));
+        latency_bucket = std::max(0, std::min(kErrorLatencyBuckets - 1, latency_bucket));
+        return id_bucket * kErrorLatencyBuckets + latency_bucket;
+    }
+
+    int QTableManager::LatencyBucket(int id_bucket) const {
+        id_bucket = std::max(0, std::min(kErrorIdBuckets - 1, id_bucket));
+        if (!latency_seen[id_bucket]) return 1;
+        const double min_value = latency_min[id_bucket];
+        const double max_value = latency_max[id_bucket];
+        if (max_value <= min_value) return 1;
+        const double normalized =
+            clamp((latency_ema[id_bucket] - min_value) / (max_value - min_value), 0.0, 1.0);
+        if (normalized < 0.33) return 0;
+        if (normalized < 0.66) return 1;
+        return 2;
+    }
+
+    int QTableManager::ObserveLatencyAndGetState(int id_bucket, double lookup_cost) {
+        id_bucket = std::max(0, std::min(kErrorIdBuckets - 1, id_bucket));
+        if (!latency_seen[id_bucket]) {
+            latency_ema[id_bucket] = lookup_cost;
+            latency_min[id_bucket] = lookup_cost;
+            latency_max[id_bucket] = lookup_cost;
+            latency_seen[id_bucket] = true;
+        } else {
+            latency_ema[id_bucket] = 0.8 * latency_ema[id_bucket] + 0.2 * lookup_cost;
+            latency_min[id_bucket] = std::min(latency_min[id_bucket], latency_ema[id_bucket]);
+            latency_max[id_bucket] = std::max(latency_max[id_bucket], latency_ema[id_bucket]);
+        }
+        return ComposeState(id_bucket, LatencyBucket(id_bucket));
     }
 
     QTableManager& getQTableManagerInstance() {

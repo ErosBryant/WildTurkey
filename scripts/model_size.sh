@@ -1,6 +1,10 @@
 #!/bin/bash
 
-python3 ./test.py testing start 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DB_BENCH="${DB_BENCH:-${BASE_DIR}/build/db_bench}"
+
+python3 "${SCRIPT_DIR}/test.py" testing start 
 
 # Define the desired --num values in an array
 # nums=(60000)
@@ -16,9 +20,8 @@ file_error=(2 4 8 16 32 64 128 256 512)
 current_time=$(date "+%Y%m%d-%H%M%S")
 # Define output directories
 # output_dir="/mnt/lac-sec/ad-wt-bour/bourbon&wt-last/bourbon/"
-output_dir="/mnt/analysis_bourbon/model_size/errorbound-last-final/"
+output_dir="${OUT_DIR:-${BASE_DIR}/build/model_size_runs/}"
 
-test_dir="/home/eros/workspace-lsm/wildturkey/build/"
 
 # total_experiment="/mnt/1tb/lac_experiment/"
 
@@ -57,7 +60,7 @@ for num in "${nums[@]}"; do
                # --file_error=$err
                # f=$((max / 2)) 
                # --lsize=$f
-               ${test_dir}/db_bench --benchmarks="fillrandom,readrandom,stats" --mod=7 --file_error=$err --num=$num >> "$output_file"
+               "${DB_BENCH}" --benchmarks="fillrandom,readrandom,stats" --mod=7 --file_error=$err --num=$num >> "$output_file"
                echo "-------------------------------------" >> "$output_file"
 
                sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
@@ -79,7 +82,7 @@ done
 #          echo "Running db_bench with --num=$num  --mod=${md} " > "$output_file"
 
 
-#            ${test_dir}/db_bench --benchmarks="fb_w,zipread,stats" --mod=7 --num=$num >> "$output_file"
+#            "${DB_BENCH}" --benchmarks="fb_w,zipread,stats" --mod=7 --num=$num >> "$output_file"
 #          echo "-------------------------------------" >> "$output_file"
 
 #          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
@@ -90,4 +93,4 @@ done
 
 
 
-python3 ./test.py testing end
+python3 "${SCRIPT_DIR}/test.py" testing end

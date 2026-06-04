@@ -127,7 +127,7 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
       auto model_sp = adgMod::file_data->GetModel(meta->number);
       *model = model_sp.get();
       assert(file_learned != nullptr);
-      *file_learned = (*model)->Learned();
+      *file_learned = (*model)->Learned() && (*model)->HasUsableModel();
 
       // if level model is used or file model is available, go Bourbon path
       if (learned || *file_learned) {
@@ -272,6 +272,11 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     // printf("LevelRead\n");
     Cache::Handle* cache_handle = nullptr;
     Status s = FindTable(file_number, file_size, &cache_handle);
+#ifdef WT_SAFE_LEARNED_READ
+    if (!s.ok() || cache_handle == nullptr) {
+      return;
+    }
+#endif
     TableAndFile* tf = reinterpret_cast<TableAndFile*>(cache_->Value(cache_handle));
     RandomAccessFile* file = tf->file;
     FilterBlockReader* filter = tf->table->rep_->filter;
@@ -299,28 +304,36 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     //     adgMod::file_data->check_loaded_file=true;
     //   }
 
-      if (!adgMod::file_data->GetModel(meta->number)->check_loaded) {
-        adgMod::file_data->GetModel(meta->number)->check_loaded=true;
+      auto model_sp = adgMod::file_data->GetModel(meta->number);
+      adgMod::LearnedIndexData* model = model_sp.get();
+      if (!model->Learned() && !model->check_loaded) {
         // printf("Loading file data\n");
-        adgMod::file_data->GetModel(meta->number)->ReadModel(dbname_ + "/" + to_string(meta->number) + ".fmodel");
+        model->ReadModel(dbname_ + "/" + to_string(meta->number) + ".fmodel");
+        model->check_loaded = true;
       }
 
 #ifdef INTERNAL_TIMER
       instance->PauseTimer(8);
 #endif      
 
-
-      auto model_sp = adgMod::file_data->GetModel(meta->number);
-      adgMod::LearnedIndexData* model = model_sp.get();
-#ifdef INTERNAL_TIMER
-      instance->StartTimer(17);
-#endif
+		      if (!model->Learned() || !model->HasUsableModel()) {
+		        tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+		                               lower, upper, false, version);
+	        cache_->Release(cache_handle);
+	        return;
+	      }
+	#ifdef INTERNAL_TIMER
+	      instance->StartTimer(17);
+	#endif
 
       auto bounds = model->GetPosition(parsed_key.user_key);
       lower = bounds.first;
       upper = bounds.second;
 
-      if (lower > model->MaxPosition()) return;
+	      if (lower > model->MaxPosition()) {
+	        cache_->Release(cache_handle);
+	        return;
+	      }
 #ifdef RECORD_LEVEL_INFO
         adgMod::levelled_counters[1].Increment(level);
       } else {
@@ -328,14 +341,29 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 #endif
     }
 
-
     // Get the position we want to read
     // Get the data block index
-    size_t index_lower = lower / adgMod::block_num_entries;
-    size_t index_upper = upper / adgMod::block_num_entries;
+	    size_t index_lower = lower / adgMod::block_num_entries;
+	    size_t index_upper = upper / adgMod::block_num_entries;
+	    Block* index_block = tf->table->rep_->index_block;
+	    if (index_block->size_ < index_block->restart_offset_) {
+	      tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+	                             lower, upper, false, version);
+	      cache_->Release(cache_handle);
+	      return;
+    }
+    const uint32_t num_data_blocks =
+        (index_block->size_ - index_block->restart_offset_) / sizeof(uint32_t);
+    if (num_data_blocks == 0 || index_lower >= num_data_blocks ||
+        index_upper >= num_data_blocks) {
+      tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+                             lower, upper, false, version);
+	      cache_->Release(cache_handle);
+	      return;
+	    }
 
 #ifdef INTERNAL_TIMER
-      instance->PauseTimer(17);
+	      instance->PauseTimer(17);
 #endif
 
 
@@ -345,13 +373,17 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 
     uint64_t i = index_lower;
     if (index_lower != index_upper) {
-      Block* index_block = tf->table->rep_->index_block;
       uint32_t mid_index_entry = DecodeFixed32(index_block->data_ + index_block->restart_offset_ + index_lower * sizeof(uint32_t));
-      uint32_t shared, non_shared, value_length;
-      const char* key_ptr = DecodeEntry(index_block->data_ + mid_index_entry,
-                                        index_block->data_ + index_block->restart_offset_, &shared, &non_shared, &value_length);
-      assert(key_ptr != nullptr && shared == 0 && "Index Entry Corruption");
-      Slice mid_key(key_ptr, non_shared);
+	      uint32_t shared, non_shared, value_length;
+	      const char* key_ptr = DecodeEntry(index_block->data_ + mid_index_entry,
+	                                        index_block->data_ + index_block->restart_offset_, &shared, &non_shared, &value_length);
+	      if (key_ptr == nullptr || shared != 0) {
+	        tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+	                               lower, upper, false, version);
+	        cache_->Release(cache_handle);
+	        return;
+	      }
+	      Slice mid_key(key_ptr, non_shared);
       int comp = tf->table->rep_->options.comparator->Compare(mid_key, k);
       i = comp < 0 ? index_upper : index_lower;
     }
@@ -377,16 +409,33 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 
 #endif
 
-    // Get the interval within the data block that the target key may lie in
-    size_t pos_block_lower = i == index_lower ? lower % adgMod::block_num_entries : 0;
-    size_t pos_block_upper = i == index_upper ? upper % adgMod::block_num_entries : adgMod::block_num_entries - 1;
+	    // Get the interval within the data block that the target key may lie in
+	    size_t pos_block_lower = i == index_lower ? lower % adgMod::block_num_entries : 0;
+	    size_t pos_block_upper = i == index_upper ? upper % adgMod::block_num_entries : adgMod::block_num_entries - 1;
+	    if (pos_block_upper < pos_block_lower) {
+	      tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+	                             lower, upper, false, version);
+	      cache_->Release(cache_handle);
+	      return;
+	    }
 
-    // Read corresponding entries
-    size_t read_size = (pos_block_upper - pos_block_lower + 1) * adgMod::entry_size;
-    static char scratch[4096];
-    Slice entries;
-    s = file->Read(block_offset + pos_block_lower * adgMod::entry_size, read_size, &entries, scratch);
-    assert(s.ok());
+	    // Read corresponding entries
+	    size_t read_size = (pos_block_upper - pos_block_lower + 1) * adgMod::entry_size;
+	    if (read_size > 4096) {
+	      tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+	                             lower, upper, false, version);
+	      cache_->Release(cache_handle);
+	      return;
+	    }
+	    static char scratch[4096];
+	    Slice entries;
+	    s = file->Read(block_offset + pos_block_lower * adgMod::entry_size, read_size, &entries, scratch);
+	    if (!s.ok() || entries.size() < read_size) {
+	      tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+	                             lower, upper, false, version);
+	      cache_->Release(cache_handle);
+	      return;
+	    }
 
 // #ifdef INTERNAL_TIMER
 //     bool first_search = true;
@@ -397,10 +446,15 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     uint64_t left = pos_block_lower, right = pos_block_upper;
     while (left < right) {
       uint32_t mid = (left + right) / 2;
-      uint32_t shared, non_shared, value_length;
-      const char* key_ptr = DecodeEntry(entries.data() + (mid - pos_block_lower) * adgMod::entry_size,
-              entries.data() + read_size, &shared, &non_shared, &value_length);
-      assert(key_ptr != nullptr && shared == 0 && "Entry Corruption");
+	      uint32_t shared, non_shared, value_length;
+	      const char* key_ptr = DecodeEntry(entries.data() + (mid - pos_block_lower) * adgMod::entry_size,
+	              entries.data() + read_size, &shared, &non_shared, &value_length);
+	      if (key_ptr == nullptr || shared != 0) {
+	        tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+	                               lower, upper, false, version);
+	        cache_->Release(cache_handle);
+	        return;
+	      }
 
 // #ifdef INTERNAL_TIMER
 //       if (first_search) {
@@ -421,10 +475,15 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 
 
     // decode the target entry to get the key and value (actually value_addr)
-    uint32_t shared, non_shared, value_length;
-    const char* key_ptr = DecodeEntry(entries.data() + (left - pos_block_lower) * adgMod::entry_size,
-            entries.data() + read_size, &shared, &non_shared, &value_length);
-    assert(key_ptr != nullptr && shared == 0 && "Entry Corruption");
+	    uint32_t shared, non_shared, value_length;
+	    const char* key_ptr = DecodeEntry(entries.data() + (left - pos_block_lower) * adgMod::entry_size,
+	            entries.data() + read_size, &shared, &non_shared, &value_length);
+	    if (key_ptr == nullptr || shared != 0) {
+	      tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+	                             lower, upper, false, version);
+	      cache_->Release(cache_handle);
+	      return;
+	    }
 // #ifdef INTERNAL_TIMER
 //     if (!first_search) {
 //       instance->PauseTimer(19);
@@ -434,11 +493,13 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 // #endif
 #ifdef INTERNAL_TIMER
     instance->PauseTimer(18);
- #endif   
-    Slice key(key_ptr, non_shared), value(key_ptr + non_shared, value_length);
-    handle_result(arg, key, value);
+	 #endif   
+	    Slice key(key_ptr, non_shared), value(key_ptr + non_shared, value_length);
+	    if (tf->table->rep_->options.comparator->Compare(key, k) == 0) {
+	      handle_result(arg, key, value);
+	    }
 
-    //cache handle;
+	    //cache handle;
     cache_->Release(cache_handle);
 }
 

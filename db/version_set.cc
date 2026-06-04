@@ -353,7 +353,7 @@ static uint64_t MaxFileSizeForLevel(const Options *options, int level) {
             }
         }
     }
-    // std::string filename = "/home/eros/workspace-lsm/wildturkey/64output_keys_level";
+    // std::string filename = "64output_keys_level";
     // std::ofstream output_file(filename, std::ios::out | std::ios::app);
 
     Status Version::Get(const ReadOptions &options, const LookupKey &k,
@@ -1889,7 +1889,7 @@ uint64_t Compaction::MaxOutputFileSizeineachlevel(int level) {
 
         if (files_[level].empty()) return false;
         
-    // std::string filename = "/home/eros/workspace-lsm/wildturkey/dbbench-result/output_keys_level_" + std::to_string(level) + ".txt";
+    // std::string filename = "dbbench-result/output_keys_level_" + std::to_string(level) + ".txt";
     // std::ofstream output_file(filename, std::ios::out | std::ios::app);
 
         for (int j = 0; j < files_[level].size(); ++j) {

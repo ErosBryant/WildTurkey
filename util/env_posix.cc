@@ -744,6 +744,33 @@ class PosixEnv : public Env {
     std::swap(background_learn_queue_, empty);
   }
 
+  void ShutdownLearning() override {
+    MutexLock l(&prepare_queue_mutex);
+    if (!preparing_thread_started) {
+      while (!learning_prepare.empty()) {
+        delete learning_prepare.front().second.second;
+        learning_prepare.pop();
+      }
+      return;
+    }
+    learning_shutdown_ = true;
+    while (!learning_prepare.empty()) {
+      delete learning_prepare.front().second.second;
+      learning_prepare.pop();
+    }
+    preparing_queue_cv.SignalAll();
+    while (prepare_learning_busy_) {
+      prepare_idle_cv_.Wait();
+    }
+  }
+
+  void WaitForLearning() override {
+    MutexLock l(&prepare_queue_mutex);
+    while (!learning_prepare.empty() || prepare_learning_busy_) {
+      prepare_idle_cv_.Wait();
+    }
+  }
+
 
   void BackgroundLearningThreadMain() {
     while (true) {
@@ -790,10 +817,17 @@ class PosixEnv : public Env {
     int64_t time_diff = 1000000;
     prepare_queue_mutex.Lock();
 
-    // dead loop
     while (true) {
-      while (learning_prepare.empty()) {
+      while (learning_prepare.empty() && !learning_shutdown_) {
         preparing_queue_cv.Wait();
+      }
+      if (learning_shutdown_) {
+        while (!learning_prepare.empty()) {
+          delete learning_prepare.front().second.second;
+          learning_prepare.pop();
+        }
+        prepare_idle_cv_.SignalAll();
+        return;
       }
 
       uint32_t dummy;
@@ -812,16 +846,19 @@ class PosixEnv : public Env {
           break;
         }
 
+        auto meta = front.second.second;
         learning_prepare.pop();
         double score = adgMod::learn_cb_model->CalculateCB(level, front.second.second->file_size);
 
-        if (adgMod::MOD == 10) {
+        if (adgMod::MOD == 10 || adgMod::AlwaysLearn == 1) {
      
           learn_pq.push(std::make_pair(score, front));
         }else{ 
-        if (score > CBModel_Learn::const_size_to_cost)
-
-         learn_pq.push(std::make_pair(score, front)); 
+        if (score > CBModel_Learn::const_size_to_cost) {
+         learn_pq.push(std::make_pair(score, front));
+        } else {
+          delete meta;
+        }
         }
 
       }
@@ -835,10 +872,17 @@ class PosixEnv : public Env {
         int level = top.second.first;
         FileMetaData* meta = top.second.second;
         auto model = adgMod::file_data->GetModel(meta->number);
+        prepare_learning_busy_ = true;
         prepare_queue_mutex.Unlock();
         adgMod::LearnedIndexData::FileLearn(new adgMod::MetaAndSelf{nullptr, 0, meta, model, level});
         prepare_queue_mutex.Lock();
+        prepare_learning_busy_ = false;
+        prepare_idle_cv_.SignalAll();
         learn_pq.pop();
+      }
+
+      if (learning_prepare.empty() && !prepare_learning_busy_) {
+        prepare_idle_cv_.SignalAll();
       }
 
       // if we decide to wait, sleep here
@@ -856,8 +900,15 @@ class PosixEnv : public Env {
   }
 
   void PrepareLearning(uint64_t time_start, int level, FileMetaData* meta) {
-    if (adgMod::fresh_write || (adgMod::MOD != 6 && adgMod::MOD != 7 && adgMod::MOD != 10)) return;
+    if (adgMod::fresh_write || (adgMod::MOD != 6 && adgMod::MOD != 7 && adgMod::MOD != 10)) {
+        delete meta;
+        return;
+    }
     MutexLock guard(&prepare_queue_mutex);
+    if (learning_shutdown_) {
+        delete meta;
+        return;
+    }
     if (!preparing_thread_started) {
         preparing_thread_started = true;
         std::thread background_thread(PosixEnv::PrepareLearnEntryPoint, this);
@@ -925,6 +976,9 @@ class PosixEnv : public Env {
   std::queue<LearnParam> learning_prepare;
   bool preparing_thread_started;
   port::CondVar preparing_queue_cv;
+  bool learning_shutdown_;
+  bool prepare_learning_busy_;
+  port::CondVar prepare_idle_cv_;
 
 
 
@@ -963,6 +1017,9 @@ PosixEnv::PosixEnv()
       started_learn_thread_(false),
       preparing_queue_cv(&prepare_queue_mutex),
       preparing_thread_started(false),
+      learning_shutdown_(false),
+      prepare_learning_busy_(false),
+      prepare_idle_cv_(&prepare_queue_mutex),
       mmap_limiter_(/*MaxMmaps()*/ adgMod::fd_limit),
       fd_limiter_(MaxOpenFiles()) {
         compaction_awaiting.store(0);

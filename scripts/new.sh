@@ -1,7 +1,10 @@
-
 #!/bin/bash
 
-python3 ./test.py testing start 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DB_BENCH="${DB_BENCH:-${BASE_DIR}/build/db_bench}"
+
+python3 "${SCRIPT_DIR}/test.py" testing start 
 
 # Define the desired --num values in an array
 nums=(200000)
@@ -11,9 +14,7 @@ mod=(10 8 7 5)
 current_time=$(date "+%Y%m%d-%H%M%S")
 # Define output directories
 # output_dir="/mnt/lac-sec/ad-wt-bour/bourbon&wt-last/bourbon/"
-output_dir="./wild_turkey_Test/"
-
-test_dir="../build"
+output_dir="${OUT_DIR:-${BASE_DIR}/wild_turkey_Test/}"
 
 
 
@@ -58,7 +59,7 @@ for num in "${nums[@]}"; do
                # --file_error=$err
                # f=$((max / 2)) 
                # --lsize=$f
-               ${test_dir}/db_bench --benchmarks="fillrandom,readrandom,stats" --mod=$md --num=$num >> "$output_file"
+               "${DB_BENCH}" --benchmarks="fillrandom,readrandom,stats" --mod=$md --num=$num >> "$output_file"
                echo "-------------------------------------" >> "$output_file"
                # fi
 
@@ -110,4 +111,4 @@ for num in "${nums[@]}"; do
 done
 
 
-python3 ./test.py testing end
+python3 "${SCRIPT_DIR}/test.py" testing end
