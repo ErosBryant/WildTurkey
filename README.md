@@ -34,21 +34,7 @@ Run the following commands from the repository root after building `build/db_ben
 
 Notice: For faster experiments, the number of benchmark entries is set lower than in the paper.
 
-### Option 1: Quick Test
-
-```bash
-bash scripts/WT_test.sh
-```
-
-This runs Wild Turkey, WiscKey, Bourbon, and vanilla LevelDB with the same benchmark mix (`fillrandom,readrandom,stats`). Logs are written under `vldb_runs/` by default.
-
-Useful overrides:
-
-```bash
-NUM=<n> OUT_DIR=<path> BENCHMARKS=fillrandom,readrandom,stats bash scripts/WT_test.sh
-```
-
-### Option 2: Availability Check
+### Option 1: Availability Check
 
 ```bash
 bash scripts/run_figure_reproduction.sh
@@ -80,6 +66,20 @@ bash scripts/run_figure_reproduction.sh
 `DATA_MODE=auto` is the default: scripts use real datasets when all requested files exist under `datasets/data/`; otherwise they fall back to db_bench built-in random keys and still generate CSV files and PNG plots. Use `DATA_MODE=real` to require real datasets or `DATA_MODE=builtin` to force built-in random-key mode.
 
 `OUT_DIR` is treated as the output root by `run_figure_reproduction.sh`; each figure script writes into its own subdirectory under that root. `DROP_CACHES=1` runs `sync` and drops the Linux page cache after each case when running as root or when passwordless `sudo` is available; otherwise the script prints a warning and continues. `CLEAR_LOGS=1` is enabled by default and removes old `.log` files in the selected log directory before a fresh run. `KEEP_DB=0` is the default, so per-case DB directories are deleted after each benchmark to avoid leaving large `.db` directories on disk; use `KEEP_DB=1` only when debugging.
+
+### Option 2: Quick Test
+
+```bash
+bash scripts/WT_test.sh
+```
+
+This runs Wild Turkey, WiscKey, Bourbon, and vanilla LevelDB with the same benchmark mix (`fillrandom,readrandom,stats`). Logs are written under `vldb_runs/` by default.
+
+Useful overrides:
+
+```bash
+NUM=<n> OUT_DIR=<path> BENCHMARKS=fillrandom,readrandom,stats bash scripts/WT_test.sh
+```
 
 ### Option 3: Manual Benchmark Commands
 
@@ -113,7 +113,7 @@ sudo bash ycsb.sh
 > - `10`: Wild Turkey
 > - `8`: WiscKey
 > - `7`: Bourbon
-> - `0`: vanilla LevelDB
+> - `5`: vanilla LevelDB
 
 For real-world SOSD-style workloads, run `bash datasets/download.sh` and keep the generated binary key files under `datasets/data/`, or pass `--path_real_data=/path/to/data`. Use `fillrandom_r,readrandom_r` with explicit `--dataset`, `--dataset_size`, and `--num`, for example:
 
