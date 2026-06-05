@@ -280,7 +280,7 @@ def main():
                  label="compaction time")
 
     ax_count.set_xticks(xs)
-    ax_count.set_xticklabels(x_labels, rotation=30, ha="right")
+    ax_count.set_xticklabels(x_labels)
     ax_count.set_ylabel("compaction count")
     ax_time.set_ylabel("compaction time (sec)")
     ax_count.grid(axis="y", linestyle=":", linewidth=0.7)
@@ -315,7 +315,7 @@ def main():
                 label="WAF")
     ax_waf.set_ylim(bottom=0)
     ax_stall.set_xticks(xs)
-    ax_stall.set_xticklabels(x_labels, rotation=30, ha="right")
+    ax_stall.set_xticklabels(x_labels)
     ax_stall.set_ylabel("write stall time (sec)")
     ax_waf.set_ylabel("write amplification")
     ax_stall.grid(axis="y", linestyle=":", linewidth=0.7)

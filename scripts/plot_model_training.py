@@ -77,7 +77,7 @@ def main():
     if len(sys.argv) != 5:
         print(
             "usage: plot_model_training.py <cases.csv> <summary.csv> "
-            "<model_size.png> <training_time.png>",
+            "<figure12_model_size.png> <figure12_training_time.png>",
             file=sys.stderr,
         )
         return 2
@@ -183,7 +183,7 @@ def main():
     fig, ax = plt.subplots(figsize=(max(6, 1.3 * len(xs)), 4.8))
     ax.bar(xs, model_values, color="#4c78a8")
     ax.set_xticks(xs)
-    ax.set_xticklabels(x_labels, rotation=20, ha="right")
+    ax.set_xticklabels(x_labels)
     ax.set_ylabel("model size (MB)")
     ax.set_ylim(bottom=0)
     ax.grid(axis="y", linestyle=":", linewidth=0.7)
@@ -196,9 +196,9 @@ def main():
     ax.bar(xs, index_training_values, color="#4c78a8", label="index training")
     ax.bar(xs, rl_values, bottom=index_training_values, color="#f58518", label="RL part")
     ax.set_xticks(xs)
-    ax.set_xticklabels(x_labels, rotation=20, ha="right")
+    ax.set_xticklabels(x_labels)
     ax.set_ylabel("index training time (sec)")
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(bottom=0, top=max(index_training_values[i] + rl_values[i] for i in range(len(xs))) * 1.1)
     ax.grid(axis="y", linestyle=":", linewidth=0.7)
     ax.legend(loc="best")
     fig.tight_layout()

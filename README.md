@@ -30,25 +30,58 @@ cmake --build . -j
 
 ## ▶️ Running Benchmarks
 
-### Option 1: Run All Tests via Script
+Run the following commands from the repository root after building `build/db_bench`.
+
+Notice: For faster experiments, the number of benchmark entries is set lower than in the paper.
+
+### Option 1: Quick Test
 
 ```bash
 bash scripts/WT_test.sh
 ```
 
-The script runs Wild Turkey, WiscKey, Bourbon, and vanilla LevelDB with the same benchmark mix (`fillrandom,readrandom,stats`), drops any previous test DBs, and saves logs under `build/vldb_runs` by default.
+This runs Wild Turkey, WiscKey, Bourbon, and vanilla LevelDB with the same benchmark mix (`fillrandom,readrandom,stats`). Logs are written under `vldb_runs/` by default.
 
-### Availability Check
-
-For a quick artifact smoke check:
+Useful overrides:
 
 ```bash
-bash scripts/check_artifact.sh
+NUM=<n> OUT_DIR=<path> BENCHMARKS=fillrandom,readrandom,stats bash scripts/WT_test.sh
 ```
 
-This runs a small workload for Wild Turkey, WiscKey, Bourbon, and vanilla LevelDB and verifies that benchmark statistics are emitted. Use `NUM=<n>` and `OUT_DIR=<path>` to override the default workload size and output directory.
+### Option 2: Availability Check
 
-### Option 2: Manual Benchmark Commands
+```bash
+bash scripts/run_figure_reproduction.sh
+```
+
+This runs the Figure 9, Figure 10, Figure 11, and Figure 12 reproduction scripts in order:
+
+- `figure9_real_workloads.sh`: workload matrix throughput for Wild Turkey, WiscKey, and Bourbon.
+- `figure10_read_breakdown.sh`: read-path breakdown after L0 compaction.
+- `figure11_write_metrics.sh`: compaction count/time, write stall time, and write amplification.
+- `figure12_model_training.sh`: model size and training-time comparison.
+
+Outputs are written under `scripts/result_figure/` by default:
+
+- `scripts/result_figure/figure9_real_workloads/`
+- `scripts/result_figure/figure10_read_breakdown/`
+- `scripts/result_figure/figure11_write_metrics/`
+- `scripts/result_figure/figure12_model_training/`
+
+Common overrides:
+
+```bash
+NUM=<n> RUNS=<n> DATASET_SIZE=<size> DATASETS="osm_cellids fb" \
+ENGINES="wildturkey:--mod=10 wisckey:--mod=8 bourbon:--mod=7" \
+OUT_DIR=<output-root> DATA_MODE=auto DROP_CACHES=1 \
+bash scripts/run_figure_reproduction.sh
+```
+
+`DATA_MODE=auto` is the default: scripts use real datasets when all requested files exist under `datasets/data/`; otherwise they fall back to db_bench built-in random keys and still generate CSV files and PNG plots. Use `DATA_MODE=real` to require real datasets or `DATA_MODE=builtin` to force built-in random-key mode.
+
+`OUT_DIR` is treated as the output root by `run_figure_reproduction.sh`; each figure script writes into its own subdirectory under that root. `DROP_CACHES=1` runs `sync` and drops the Linux page cache after each case when running as root or when passwordless `sudo` is available; otherwise the script prints a warning and continues. `CLEAR_LOGS=1` is enabled by default and removes old `.log` files in the selected log directory before a fresh run. `KEEP_DB=0` is the default, so per-case DB directories are deleted after each benchmark to avoid leaving large `.db` directories on disk; use `KEEP_DB=1` only when debugging.
+
+### Option 3: Manual Benchmark Commands
 
 ```bash
 cd build
@@ -67,7 +100,7 @@ cd build
 
 ```
 <!-- 
-### Option 3: Run YCSB via Script 
+### Run YCSB via Script 
 
 ```bash
 cd scripts
@@ -90,51 +123,7 @@ For real-world SOSD-style workloads, run `bash datasets/download.sh` and keep th
   --path_real_data=datasets/data --mod=10
 ```
 
-Expected real dataset names are `osm_cellids`, `books`, `fb`, and `wiki_ts`. The real-data benchmark commands also support `balanced_r` and `readheavy_r` for 50% read / 50% write and 90% read / 10% write workloads. For scripts below, `DATA_MODE=auto` is the default: scripts use real datasets when all requested files exist, otherwise they fall back to db_bench built-in random keys and still generate CSV files and PNG plots. Use `DATA_MODE=real` to require real datasets or `DATA_MODE=builtin` to force the built-in random-key mode.
-
-### Figure Reproduction Scripts
-
-To reproduce the Figure 9 style workload matrix for Wild Turkey, WiscKey, and Bourbon across the four datasets and workload mixes, run:
-
-```bash
-bash scripts/figure9_real_workloads.sh
-```
-
-The script reports write-only, read-only, balanced, and read-heavy throughput. It writes raw logs under `build/figure9_real_workloads/logs/`, per-case working directories under `build/figure9_real_workloads/work/`, and `summary.csv` plus `figure9_real_workloads.png` under `build/figure9_real_workloads/`. Per-case DB directories are deleted immediately after each benchmark by default; use `KEEP_DB=1` only when debugging.
-
-To reproduce the Figure 10 style read breakdown, run:
-
-```bash
-bash scripts/figure10_read_breakdown.sh
-```
-
-The default compares WiscKey, Bourbon, and Wild Turkey on `osm_cellids` and `fb` with `NUM=20000000`. Each case runs fill, `flushmem`, `compactl0`, `waitbg`, read, and `stats` in one db_bench process, so the read breakdown is collected after L0 SSTables are compacted without closing and reopening the DB. Outputs are written under `build/figure10_read_breakdown/`, including `cases.csv`, `summary.csv`, `figure10_read_breakdown.png`, and raw logs.
-
-To reproduce the Figure 11 style write-side metrics, run:
-
-```bash
-bash scripts/figure11_write_metrics.sh
-```
-
-The default uses the OSM dataset (`osm_cellids`) or built-in random data if OSM is unavailable, and compares Wild Turkey, WiscKey, and Bourbon with `NUM=60000000`. It produces two plots under `build/figure11_write_metrics/`: `figure11_compaction.png` for compaction count/time and `figure11_stall_waf.png` for write stall time and write amplification. It also writes `cases.csv`, `summary.csv`, and logs.
-
-To reproduce the model-size and training-time comparison for Bourbon and Wild Turkey, run:
-
-```bash
-bash scripts/figure12_model_training.sh
-```
-
-The default uses `osm_cellids` or built-in random data if unavailable, compares Bourbon with `--always_learn=1` against Wild Turkey, and uses `NUM=20000000`. It plots live model size and index training time under `build/model_training/` as `model_size.png` and `training_time.png`. Wild Turkey's plotted training time includes the model training time reported by `ModelTrainingStats` plus the measured RL component.
-
-Common overrides for the figure scripts are:
-
-```bash
-NUM=<n> RUNS=<n> DATASET_SIZE=<size> DATASETS="osm_cellids fb" \
-ENGINES="wildturkey:--mod=10 wisckey:--mod=8 bourbon:--mod=7" \
-OUT_DIR=<path> DATA_MODE=auto DROP_CACHES=1 bash scripts/figure9_real_workloads.sh
-```
-
-`DROP_CACHES=1` runs `sync` and drops the Linux page cache after each case when running as root or when passwordless `sudo` is available; otherwise the script prints a warning and continues. `CLEAR_LOGS=1` is enabled by default and removes old `.log` files in the selected log directory before a fresh run. `KEEP_DB=0` is the default, so per-case DB directories are deleted after each benchmark to avoid leaving large `.db` directories on disk.
+Expected real dataset names are `osm_cellids`, `books`, `fb`, and `wiki_ts`. The real-data benchmark commands also support `balanced_r` and `readheavy_r` for 50% read / 50% write and 90% read / 10% write workloads. For the figure reproduction wrapper above, `DATA_MODE=auto` is the default: scripts use real datasets when all requested files exist, otherwise they fall back to db_bench built-in random keys and still generate CSV files and PNG plots. Use `DATA_MODE=real` to require real datasets or `DATA_MODE=builtin` to force the built-in random-key mode.
 
 ---
 

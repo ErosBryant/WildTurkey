@@ -6,7 +6,7 @@ BASE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DB_BENCH="${DB_BENCH:-${BASE_DIR}/build/db_bench}"
 DATA_DIR="${DATA_DIR:-${BASE_DIR}/datasets/data}"
-OUT_DIR="${OUT_DIR:-${BASE_DIR}/build/model_training}"
+OUT_DIR="${OUT_DIR:-${BASE_DIR}/build/figure12_model_training}"
 LOG_DIR="${LOG_DIR:-${OUT_DIR}/logs}"
 DATA_MODE="${DATA_MODE:-auto}"
 NUM="${NUM:-20000000}"
@@ -261,10 +261,10 @@ fi
 python3 "${SCRIPT_DIR}/plot_model_training.py" \
   "${CASES}" \
   "${SUMMARY}" \
-  "${OUT_DIR}/model_size.png" \
-  "${OUT_DIR}/training_time.png"
+  "${OUT_DIR}/figure12_model_size.png" \
+  "${OUT_DIR}/figure12_training_time.png"
 
 echo "cases: ${CASES}"
 echo "summary: ${SUMMARY}"
-echo "model size plot: ${OUT_DIR}/model_size.png"
-echo "training time plot: ${OUT_DIR}/training_time.png"
+echo "model size plot: ${OUT_DIR}/figure12_model_size.png"
+echo "training time plot: ${OUT_DIR}/figure12_training_time.png"

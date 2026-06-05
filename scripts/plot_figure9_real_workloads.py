@@ -64,7 +64,7 @@ def main():
 
         ax.set_title(workload.replace("_", "-"))
         ax.set_xticks([x + bar_width * (len(engines) - 1) / 2 for x in x_positions])
-        ax.set_xticklabels(datasets, rotation=20, ha="right")
+        ax.set_xticklabels(datasets)
         ax.set_ylabel("ops/sec")
         ax.grid(axis="y", linestyle=":", linewidth=0.7)
 

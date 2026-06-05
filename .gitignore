@@ -15,6 +15,7 @@ report.csv
 result_eb.csv
 scripts/report.csv
 scripts/result_eb.csv
+scripts/result_figure/
 scripts/
 
 # Python cache.

@@ -186,7 +186,7 @@ def main():
 
         ax.set_title(dataset)
         ax.set_xticks(xs)
-        ax.set_xticklabels(engines, rotation=20, ha="right")
+        ax.set_xticklabels(engines)
         ax.set_ylabel("microseconds / read")
         ax.grid(axis="y", linestyle=":", linewidth=0.7)
 
