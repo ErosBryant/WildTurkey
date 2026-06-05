@@ -3,7 +3,7 @@
 
 This repository provides the code, scripts, and configurations necessary to reproduce the experimental results of our **VLDB 2026** submission:
 
-### ✨ Rethinking Learned Index and LSM-tree Integration ✨
+## ✨ Rethinking Learned Index and LSM-tree Integration ✨
 
 📦 **This repository includes:**
 - 💻 Source code implementing **Wild Turkey**, including Level-Aware Compaction (LAC) and Wild-Learning.
@@ -100,22 +100,21 @@ cd build
 # 🦃 Wild Turkey
 ./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=10 > ../WildTurkey_test.log
 
-# 🔑 WiscKey
+# WiscKey
 ./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=8 > ../WiscKey_test.log
 
-# 🥃 Bourbon
+# Bourbon
 ./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=7 > ../Bourbon_test.log
 
-# 🏗️ Vanilla LevelDB
-./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=0 > ../LevelDB_test.log
+# Vanilla LevelDB
+./db_bench --benchmarks="fillrandom,readrandom,stats" --num=20000000 --mod=5 > ../LevelDB_test.log
 ```
 
 > 🔸 **The `--mod` flag selects the storage engine mode:**
 > * `10`: **Wild Turkey**
 > * `8`: **WiscKey**
 > * `7`: **Bourbon**
-> * `0`: **vanilla LevelDB**
-> 
+> * `5`: **vanilla LevelDB**
 > 
 
 #### Real-World SOSD-Style Workloads
