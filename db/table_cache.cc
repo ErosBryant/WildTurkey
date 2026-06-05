@@ -284,15 +284,20 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     instance->PauseTimer(1);
 #endif
 
-    adgMod::levelled_counters[13].Increment(0);
+	    adgMod::levelled_counters[13].Increment(0);
+	    ParsedInternalKey target_key;
+	    if (!ParseInternalKey(k, &target_key)) {
+	      tf->table->InternalGet(options, k, arg, handle_result, level, meta,
+	                             lower, upper, false, version);
+	      cache_->Release(cache_handle);
+	      return;
+	    }
 
-    if (!learned) {
-      // if level model is not used, consult file model for predicted position
+	    if (!learned) {
+	      // if level model is not used, consult file model for predicted position
 
-      // adgMod::counte_read += 1;
-      ParsedInternalKey parsed_key;
-      ParseInternalKey(k, &parsed_key);
-    
+	      // adgMod::counte_read += 1;
+	    
     #ifdef INTERNAL_TIMER
       instance->StartTimer(8);
     #endif
@@ -326,7 +331,7 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 	      instance->StartTimer(17);
 	#endif
 
-      auto bounds = model->GetPosition(parsed_key.user_key);
+	      auto bounds = model->GetPosition(target_key.user_key);
       lower = bounds.first;
       upper = bounds.second;
 
@@ -494,10 +499,12 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 #ifdef INTERNAL_TIMER
     instance->PauseTimer(18);
 	 #endif   
-	    Slice key(key_ptr, non_shared), value(key_ptr + non_shared, value_length);
-	    if (tf->table->rep_->options.comparator->Compare(key, k) == 0) {
-	      handle_result(arg, key, value);
-	    }
+		    Slice key(key_ptr, non_shared), value(key_ptr + non_shared, value_length);
+		    ParsedInternalKey found_key;
+		    if (ParseInternalKey(key, &found_key) &&
+		        found_key.user_key.compare(target_key.user_key) == 0) {
+		      handle_result(arg, key, value);
+		    }
 
 	    //cache handle;
     cache_->Release(cache_handle);
